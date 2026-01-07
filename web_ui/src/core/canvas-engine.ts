@@ -6,22 +6,22 @@
 import Konva from 'konva'
 
 export class CanvasEngine {
-  stage: Konva.Stage
-  imageLayer: Konva.Layer
-  cropLayer: Konva.Layer
-  transformer: Konva.Transformer
-  transformerAdded: boolean
-  activeTool: string | null
-  currentImage: Konva.Image | null
-  originalDimensions: { width: number; height: number }
-  displayScale: number
-  imageScale: number
-  combinedScale: number
-  minZoomScale: number
-  listeners: Map<string, Array<(...args: unknown[]) => void>>
-  isPanning: boolean
-  lastPosX: number
-  lastPosY: number
+  stage: Konva.Stage;
+  imageLayer: Konva.Layer;
+  cropLayer: Konva.Layer;
+  transformer: Konva.Transformer;
+  transformerAdded: boolean;
+  activeTool: string | null;
+  currentImage: Konva.Image | null;
+  originalDimensions: { width: number; height: number };
+  displayScale: number;
+  imageScale: number;
+  combinedScale: number;
+  minZoomScale: number;
+  listeners: Map<string, Array<(...args: unknown[]) => void>>;
+  isPanning: boolean;
+  lastPosX: number;
+  lastPosY: number;
 
   constructor(canvasElement: HTMLCanvasElement, options: Record<string, unknown> = {}) {
     const wrapper = canvasElement.parentElement
@@ -140,8 +140,41 @@ export class CanvasEngine {
           rotation: 0
         })
 
+        // Ensure filters/defaults are neutral for each newly loaded image
+        try {
+          this.currentImage.filters([])
+        } catch (err) {
+          // Some Konva versions might not expose filters() until cached
+        }
+        // Ensure brightness/contrast attributes are neutral
+        try {
+          if (typeof (this.currentImage as any).brightness === 'function') (this.currentImage as any).brightness(0)
+          if (typeof (this.currentImage as any).contrast === 'function') (this.currentImage as any).contrast(0)
+        } catch (err) {
+          // ignore
+        }
+
         this.imageLayer.add(this.currentImage)
         this.imageLayer.batchDraw()
+
+        // Cache the image once so Konva filters can operate without
+        // re-caching on every small adjustment (which is expensive).
+        try {
+          this.currentImage.cache()
+        } catch (err) {
+          // Fail silently if caching is unsupported in this environment
+          console.warn('Image caching failed:', err)
+        }
+
+        // Debug: log current filters/values to help diagnose bright image issues
+        try {
+          // setTimeout to let any async setAttrs settle
+          setTimeout(() => {
+            console.log('CanvasEngine: loaded image filters', this.getFilters())
+          }, 20)
+        } catch (err) {
+          // ignore
+        }
 
         this.resetZoom()
 
@@ -193,7 +226,7 @@ export class CanvasEngine {
       stroke: '#3b82f6',
       strokeWidth: 2,
       strokeScaleEnabled: false,
-      dash: [8, 8],
+      dash: [4, 4],
       draggable: true,
       name: 'cropBox'
     })
@@ -245,15 +278,11 @@ export class CanvasEngine {
     const topLeftX = img.x() - rotatedW_UI / 2
     const topLeftY = img.y() - rotatedH_UI / 2
 
-    console.group('🔍 getCropBoxes Debug')
-    console.log('Stage transform (scale/pos):', { scale: this.stage.scaleX(), x: this.stage.x(), y: this.stage.y() })
-    console.log('Display scale:', displayScale)
-    console.log('Image bounds:', { topLeftX, topLeftY, rotatedW_UI, rotatedH_UI })
-
     return crops.map((rect: any) => {
-      const absTL = rect.getAbsoluteTransform().point({ x: 0, y: 0 })
-      const absTR = rect.getAbsoluteTransform().point({ x: rect.width() * rect.scaleX(), y: 0 })
-      const absBL = rect.getAbsoluteTransform().point({ x: 0, y: rect.height() * rect.scaleY() })
+      const absTF = rect.getAbsoluteTransform()
+      const absTL = absTF.point({ x: 0, y: 0 })
+      const absTR = absTF.point({ x: rect.width() * rect.scaleX(), y: 0 })
+      const absBL = absTF.point({ x: 0, y: rect.height() * rect.scaleY() })
 
       const tl = stageInv.point(absTL)
       const tr = stageInv.point(absTR)
@@ -272,11 +301,6 @@ export class CanvasEngine {
 
       const result = { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }
 
-      console.log('Rect abs TL:', absTL, 'unzoomed TL:', tl)
-      console.log('Rect size (display):', { w_display, h_display })
-      console.log('Final result:', result)
-      console.groupEnd()
-
       return result
     })
   }
@@ -288,26 +312,13 @@ export class CanvasEngine {
     const imgNode = this.currentImage
     if (!imgNode) return []
 
-    const rotation = imgNode.rotation()
-    const rad = (rotation * Math.PI) / 180
-
     const combinedScale = this.combinedScale || this.displayScale * this.imageScale
-
-    const imgW_canvas = imgNode.width() * imgNode.scaleX()
-    const imgH_canvas = imgNode.height() * imgNode.scaleY()
-
-    console.group('💾 Saving Bbox to Original Coordinates')
-    console.log('Rotation:', rotation, 'degrees')
-    console.log('Combined scale:', combinedScale)
-    console.log('Image on canvas (WxH):', imgW_canvas, 'x', imgH_canvas)
 
     return crops.map((rect: any) => {
       const x_display = rect.x()
       const y_display = rect.y()
       const w_display = rect.width() * rect.scaleX()
       const h_display = rect.height() * rect.scaleY()
-
-      console.log('Bbox on canvas (display):', { x: x_display, y: y_display, w: w_display, h: h_display })
 
       const result = {
         x: Math.round(x_display / combinedScale),
@@ -316,7 +327,6 @@ export class CanvasEngine {
         h: Math.round(h_display / combinedScale)
       }
 
-      console.log('Bbox in original coordinates:', result)
       console.groupEnd()
 
       return result
@@ -476,7 +486,6 @@ export class CanvasEngine {
       offsetY: this.currentImage.offsetY()
     }
 
-    const img = this.currentImage?.image()
     const rotation = this.currentImage ? this.currentImage.rotation() : 0
     const rad = (rotation * Math.PI) / 180
 
@@ -513,6 +522,11 @@ export class CanvasEngine {
     const { format = 'png', quality = 1 } = options
 
     const originalCrops = this.getCropBoxes()
+
+    const originalCropsReal = this.getCropBoxesForOriginal()
+    console.info('Compare between original crops and real original crops:', originalCrops, originalCropsReal)
+
+    
     if (originalCrops.length === 0) return null
     const crop = originalCrops[0]
 
@@ -611,12 +625,24 @@ export class CanvasEngine {
 
     const { brightness = 0, contrast = 0 } = options
 
-    this.currentImage.filters([])
+    // Build filter list depending on requested adjustments
+    const filters: any[] = []
 
-    if (Math.abs(brightness) > 0.01) this.currentImage.brightness(brightness)
-    if (Math.abs(contrast) > 0.01) this.currentImage.contrast(contrast * 100)
+    if (Math.abs(brightness) > 0.01) {
+      filters.push(Konva.Filters.Brighten)
+      this.currentImage.brightness(brightness)
+    }
 
-    this.currentImage.cache()
+    if (Math.abs(contrast) > 0.01) {
+      filters.push(Konva.Filters.Contrast)
+      // Konva contrast filter expects roughly -100..100 range
+      this.currentImage.contrast(contrast * 100)
+    }
+
+    // Apply filters to node (empty array clears filters)
+    // Note: image was cached when loaded; avoid re-caching here to prevent
+    // heavy synchronous work on every input event.
+    this.currentImage.filters(filters)
     this.imageLayer.batchDraw()
   }
 

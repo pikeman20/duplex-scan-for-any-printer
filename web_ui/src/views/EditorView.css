@@ -52,6 +52,21 @@
   font-weight: 600;
 }
 
+.btn-clear-all {
+  margin-left: 8px;
+  padding: 6px 8px;
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btn-clear-all:hover {
+  background: #dc2626;
+}
+
 .save-status .unsaved {
   color: #ff9800;
   font-size: 12px;
@@ -102,6 +117,12 @@
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 12px;
+}
+
+.thumb-number.dirty {
+  background: #ff9800; /* orange to indicate unsaved */
+  color: #fff;
+  box-shadow: 0 0 0 2px rgba(255,152,0,0.12);
 }
 
 .canvas-area {

@@ -78,6 +78,20 @@ class ProjectMetadata(BaseModel):
     images: List[Dict]  # List of image metadata
     layout: Optional[Dict] = None  # Layout settings
 
+def _calculateDPI(imWidth: int, imHeight: int) -> int:
+    # Determine scan DPI:
+    # Prefer embedded metadata (if present), else infer from A4 size and snap to standard DPI.
+    # A4 physical size: 8.27" × 11.69"; DPI ≈ pixels / inches
+    scan_w_inch = 8.27
+    scan_h_inch = 11.69
+    dpi_w = imWidth / scan_w_inch
+    dpi_h = imHeight / scan_h_inch
+    inferred_dpi = (dpi_w + dpi_h) / 2.0  # Average DPI
+
+    # Snap to nearest common scanner DPI to avoid odd values
+    common_dpi = [75, 100, 150, 200, 300, 600, 1200]
+    scan_dpi = min(common_dpi, key=lambda v: abs(v - inferred_dpi))
+    return scan_dpi
 
 # API Endpoints
 

@@ -20,6 +20,8 @@ interface ImageMeta {
   brightness?: number;
   contrast?: number;
   bbox?: CropBox[];
+  __original?: any;
+  _dirty?: boolean;
 }
 
 const emit = defineEmits(['back']);
@@ -29,6 +31,7 @@ const editorStore = useEditorStore();
 const images: Ref<ImageMeta[]> = ref([] as ImageMeta[]);
 const selectedIndex = ref<number>(0);
 const mainCanvas = ref<HTMLCanvasElement | null>(null);
+const canvasWrapper = ref<HTMLElement | null>(null);
 const previewCanvas = ref<HTMLCanvasElement | null>(null);
 const zoom = ref<number>(1);
 const isLoading = ref<boolean>(false);
@@ -90,8 +93,20 @@ async function loadProject(): Promise<void> {
       deskew_angle: img.deskew_angle || 0,
       brightness: img.brightness || 1.0,
       contrast: img.contrast || 1.0,
-      bbox: img.bbox ? (Array.isArray(img.bbox) ? img.bbox : [img.bbox]) : []
-    } as ImageMeta));
+      bbox: img.bbox ? (Array.isArray(img.bbox) ? img.bbox : [img.bbox]) : [],
+      _dirty: false
+      } as ImageMeta)).map((m: ImageMeta, idx: number) => {
+        // Attach an immutable snapshot of original metadata so reset can restore it
+        const raw = response.data.images[idx] || {};
+        ;(m as any).__original = {
+          rotation: raw.rotation || 0,
+          deskew_angle: raw.deskew_angle || 0,
+          brightness: raw.brightness || 1.0,
+          contrast: raw.contrast || 1.0,
+          bbox: raw.bbox ? (Array.isArray(raw.bbox) ? raw.bbox : [raw.bbox]) : []
+        };
+        return m;
+      });
     
     console.log('loadProject: loaded images', images.value.length);
     
@@ -106,6 +121,37 @@ async function loadProject(): Promise<void> {
   } catch (error) {
     console.error('Failed to load project:', error);
     alert('Failed to load project');
+  }
+}
+
+// Project-level dirty indicator (true if any image is dirty)
+const projectDirty = computed(() => images.value.some(img => !!img._dirty));
+
+// Clear all edits across all images by restoring from each image's __original snapshot
+function clearAllEdits(): void {
+  console.log('clearAllEdits: Reset All clicked')
+
+  // Mutate images in-place (avoids replacing the array reference which
+  // can sometimes interfere with reactivity in certain setups).
+  images.value.forEach((img, idx) => {
+    const original = (img as any).__original || {};
+    img.rotation = original.rotation || 0;
+    img.deskew_angle = original.deskew_angle || 0;
+    img.brightness = original.brightness || 1.0;
+    img.contrast = original.contrast || 1.0;
+    img.bbox = original.bbox ? (Array.isArray(original.bbox) ? JSON.parse(JSON.stringify(original.bbox)) : [JSON.parse(JSON.stringify(original.bbox))]) : [];
+    img._dirty = false;
+  });
+
+  // Clear any preview and mark project as clean
+  previewUrl.value = null;
+  isDirty.value = false;
+
+  // Reload the current image to apply restored values on the canvas
+  if (selectedIndex.value >= 0 && selectedIndex.value < images.value.length) {
+    loadImageToCanvas(selectedIndex.value).catch(err => {
+      console.error('clearAllEdits: failed to reload image after reset', err);
+    });
   }
 }
 
@@ -151,6 +197,18 @@ async function loadImageToCanvas(index: number): Promise<void> {
   const originalSize = await getImageSize(originalUrl);
   
   await canvasEngine.loadImage(imageUrl, originalSize.width);
+
+  // Clear any CSS preview artifacts that might have been left on the wrapper
+  if (canvasWrapper.value) {
+    canvasWrapper.value.style.filter = '';
+    canvasWrapper.value.style.transform = '';
+    canvasWrapper.value.style.willChange = '';
+  }
+
+  // Initialize prev-applied values so we don't accidentally reapply stale transforms
+  _prevAppliedRotation = currentRotation.value;
+  _prevAppliedBrightness = currentBrightness.value;
+  _prevAppliedContrast = currentContrast.value;
   
   // Load saved adjustments - display rotation = rotation + deskew_angle
   // Note: Negate rotation because metadata uses clockwise, should uses counter-clockwise
@@ -232,8 +290,6 @@ async function updatePreview(): Promise<void> {
         aspectRatio: calculateAspectRatio(crop.w, crop.h)
       };
     }
-  } else {
-    console.error('updatePreview: no cropped data URL');
   }
 }
 
@@ -361,6 +417,9 @@ function centerPreviewView() {
 function applyRotation(angle: number): void {
   if (!canvasEngine) return;
   canvasEngine.applyRotation(angle);
+  // Update preview (coalesced) so crop preview reflects rotation
+  schedulePreviewUpdate();
+  _prevAppliedRotation = angle;
 }
 
 /**
@@ -372,6 +431,67 @@ function applyBrightnessContrast(): void {
     brightness: currentBrightness.value / 100,
     contrast: currentContrast.value / 100
   });
+  // Update preview (coalesced) so crop preview reflects filters
+  schedulePreviewUpdate();
+}
+ 
+// Coalesce preview updates using requestAnimationFrame to avoid expensive
+// exportCropBoxFromOriginal() running on every tiny input event.
+let _previewUpdateScheduled = false;
+function schedulePreviewUpdate(): void {
+  if (_previewUpdateScheduled) return;
+  _previewUpdateScheduled = true;
+  requestAnimationFrame(async () => {
+    _previewUpdateScheduled = false;
+    try {
+      await updatePreview();
+    } catch (err) {
+      console.error('Failed to update preview:', err);
+    }
+  });
+}
+
+// Adjustment observer: batches rotation/brightness/contrast changes and applies
+// them once per animation frame for smooth UI and minimal expensive exports.
+let _adjustmentScheduled = false;
+// Remember last applied values to avoid reapplying unchanged transforms
+let _prevAppliedRotation = NaN;
+let _prevAppliedBrightness = NaN;
+let _prevAppliedContrast = NaN;
+let _lastPreviewTs = 0;
+const PREVIEW_THROTTLE_MS = 200;
+
+function notifyAdjustmentChange(): void {
+  const rot = currentRotation.value;
+  const bri = currentBrightness.value;
+  const con = currentContrast.value;
+
+  const rotationChanged = rot !== _prevAppliedRotation;
+  const brightnessChanged = bri !== _prevAppliedBrightness;
+  const contrastChanged = con !== _prevAppliedContrast;
+
+  // If user is actively dragging, avoid doing expensive Konva operations.
+  // Use CSS preview for instant feedback and DO NOT export previews until finish.
+  if (isAdjusting) {
+    return;
+  }
+
+  // Not adjusting — apply only changes to Konva to minimize work
+  if (canvasEngine) {
+    if (rotationChanged) {
+      // applyRotation schedules a preview update
+      canvasEngine.applyRotation(rot);
+      _prevAppliedRotation = rot;
+    }
+
+    if (brightnessChanged || contrastChanged) {
+      canvasEngine.applyFilters({ brightness: bri / 100, contrast: con / 100 });
+      _prevAppliedBrightness = bri;
+      _prevAppliedContrast = con;
+      // ensure preview reflects filters
+      schedulePreviewUpdate();
+    }
+  }
 }
 
 /**
@@ -379,39 +499,109 @@ function applyBrightnessContrast(): void {
  */
 function startBrightnessAdjust() {
   isAdjusting = true;
+  enableCssPreview(true);
 }
 
 function onBrightnessInput() {
   if (isAdjusting) {
-    applyBrightnessContrast();
+    applyCssFilter();
+    // still schedule the coalesced export so preview updates at rAF rate
+    notifyAdjustmentChange();
   }
 }
 
 function finishBrightnessAdjust() {
   isAdjusting = false;
+  // Apply the final filters to Konva and mark dirty
+  enableCssPreview(false);
+  applyBrightnessContrast();
+  // record applied
+  _prevAppliedBrightness = currentBrightness.value;
+  _prevAppliedContrast = currentContrast.value;
   markDirty();
 }
 
 function startContrastAdjust() {
   isAdjusting = true;
+  enableCssPreview(true);
 }
 
 function onContrastInput() {
   if (isAdjusting) {
-    applyBrightnessContrast();
+    applyCssFilter();
+    notifyAdjustmentChange();
   }
 }
 
 function finishContrastAdjust() {
   isAdjusting = false;
+  enableCssPreview(false);
+  applyBrightnessContrast();
+  _prevAppliedBrightness = currentBrightness.value;
+  _prevAppliedContrast = currentContrast.value;
   markDirty();
 }
 
 /**
  * Handle rotation adjustment
  */
+function startRotationAdjust() {
+  isAdjusting = true;
+}
+
 function handleAdjustment(): void {
+  if (isAdjusting) {
+    // While dragging, apply rotation directly to Konva so crop boxes remain upright
+    if (canvasEngine) {
+      try {
+        canvasEngine.applyRotation(currentRotation.value);
+        _prevAppliedRotation = currentRotation.value;
+      } catch (err) {
+        // fallback: schedule a coalesced update
+        notifyAdjustmentChange();
+      }
+    }
+  } else {
+    notifyAdjustmentChange();
+  }
+}
+
+// Apply CSS transform/filters to the canvas wrapper for instant lightweight preview
+function applyCssFilter(): void {
+  if (!canvasWrapper.value) return;
+  const brightness = currentBrightness.value;
+  const contrast = currentContrast.value;
+  // Map to CSS filter values: brightness(%) contrast(%). Convert -100..100 to 0..200%
+  const cssBrightness = 100 + brightness; // -100 -> 0%, 0 -> 100%, +100 -> 200%
+  const cssContrast = 100 + contrast;
+  canvasWrapper.value.style.filter = `brightness(${cssBrightness}%) contrast(${cssContrast}%)`;
+}
+
+function applyCssRotation(): void {
+  // CSS rotation intentionally disabled because it rotates the entire stage
+  // (including bbox). Rotation should be applied via Konva so bbox stays upright.
+}
+
+function enableCssPreview(enabled: boolean): void {
+  if (!canvasWrapper.value) return;
+  if (!enabled) {
+    // Remove css preview styles
+    canvasWrapper.value.style.filter = '';
+    canvasWrapper.value.style.transform = '';
+    canvasWrapper.value.style.willChange = '';
+  } else {
+    applyCssFilter();
+    applyCssRotation();
+    // Hint to the compositor to promote to its own layer
+    canvasWrapper.value.style.willChange = 'transform, filter';
+  }
+}
+
+function finishRotationAdjust() {
+  isAdjusting = false;
+  // Apply final rotation and update preview
   applyRotation(currentRotation.value);
+  _prevAppliedRotation = currentRotation.value;
   markDirty();
 }
 
@@ -420,8 +610,8 @@ function handleAdjustment(): void {
  */
 watch(currentRotation, () => {
   if (currentImage.value) {
-    applyRotation(currentRotation.value);
-    markDirty();
+    // Keep UI responsive when currentRotation is changed programmatically
+    notifyAdjustmentChange();
   }
 });
 
@@ -429,14 +619,63 @@ watch(currentRotation, () => {
  * Reset adjustments
  */
 function resetAdjustments() {
-  currentRotation.value = 0;
-  currentBrightness.value = 0;
-  currentContrast.value = 0;
-  
-  applyRotation(0);
-  applyBrightnessContrast();
-  
-  markDirty();
+  // Restore original metadata for the current image if available
+  const img = currentImage.value;
+  if (!img) return;
+
+  const original = (img as any).__original || {
+    rotation: 0,
+    deskew_angle: 0,
+    brightness: 1.0,
+    contrast: 1.0,
+    bbox: []
+  };
+
+  // Restore UI values (convert brightness/contrast from 1.0 base to -100..100 slider)
+  const totalRotation = -((original.rotation || 0) + (original.deskew_angle || 0));
+  currentRotation.value = totalRotation;
+  currentBrightness.value = ((original.brightness || 1.0) - 1.0) * 100;
+  currentContrast.value = ((original.contrast || 1.0) - 1.0) * 100;
+
+  // Restore bbox on canvas
+  if (canvasEngine) {
+    // Ensure any CSS preview is cleared before applying Konva transforms
+    enableCssPreview(false);
+
+    canvasEngine.clear();
+    if (original.bbox && original.bbox.length > 0) {
+      canvasEngine.loadCropBoxes(original.bbox.map((b: any) => ({ ...b })));
+    }
+
+    // Apply rotation and filters from original
+    applyRotation(currentRotation.value);
+    applyBrightnessContrast();
+
+    // Force a redraw to ensure canvas reflects rotation immediately
+    try {
+      canvasEngine.imageLayer.batchDraw();
+      canvasEngine.centerView();
+    } catch (err) {
+      // ignore if internals unavailable
+    }
+  }
+
+  // Update prev-applied markers so we don't reapply unnecessarily
+  _prevAppliedRotation = currentRotation.value;
+  _prevAppliedBrightness = currentBrightness.value;
+  _prevAppliedContrast = currentContrast.value;
+  // Persist restored values into the image metadata so switching images keeps reset state
+  if (currentImage.value) {
+    currentImage.value.rotation = -(currentRotation.value);
+    currentImage.value.deskew_angle = 0;
+    currentImage.value.brightness = 1.0 + (currentBrightness.value / 100);
+    currentImage.value.contrast = 1.0 + (currentContrast.value / 100);
+    currentImage.value.bbox = original.bbox && original.bbox.length > 0 ? original.bbox.map((b: any) => ({ ...b })) : [];
+  }
+
+  // Not dirty immediately after reset (we're back to original) — clear only current image
+  if (currentImage.value) currentImage.value._dirty = false;
+  isDirty.value = images.value.some(img => !!img._dirty);
 }
 
 /**
@@ -444,6 +683,7 @@ function resetAdjustments() {
  */
 function markDirty(): void {
   isDirty.value = true;
+  if (currentImage.value) currentImage.value._dirty = true;
   if (currentImage.value) {
     currentImage.value.rotation = -currentRotation.value;
     currentImage.value.deskew_angle = 0;
@@ -580,12 +820,28 @@ function zoomOut(): void {
 function resetCropBoxes(): void {
   if (!canvasEngine) return;
 
-  if (currentImage.value && currentImage.value.bbox && currentImage.value.bbox.length > 0) {
-    canvasEngine.clear();
-    canvasEngine.loadCropBoxes(currentImage.value.bbox);
-  } else {
-    canvasEngine.clear();
+  const img = currentImage.value;
+  let boxesToLoad: any[] | null = null;
+
+  if (img) {
+    const original = (img as any).__original;
+    if (original && original.bbox && original.bbox.length > 0) {
+      boxesToLoad = original.bbox.map((b: any) => ({ ...b }));
+      // persist restored bbox back into current metadata
+      img.bbox = boxesToLoad;
+    } else if (img.bbox && img.bbox.length > 0) {
+      boxesToLoad = img.bbox.map((b: any) => ({ ...b }));
+    }
   }
+
+  canvasEngine.clear();
+  if (boxesToLoad && boxesToLoad.length > 0) {
+    canvasEngine.loadCropBoxes(boxesToLoad);
+  }
+
+  // After reset to original, not dirty
+  if (currentImage.value) currentImage.value._dirty = false;
+  isDirty.value = images.value.some(img => !!img._dirty);
 
   updatePreview();
 }
@@ -640,6 +896,7 @@ function getThumbnailUrl(filename: string | undefined): string {
 // Lifecycle
 onMounted(() => {
   loadProject();
+  // nothing special on mount
 });
 
 onBeforeUnmount(() => {
@@ -648,5 +905,6 @@ onBeforeUnmount(() => {
     canvasEngine.destroy();
     canvasEngine = null;
   }
+  // nothing special on unmount
 });
 </script>

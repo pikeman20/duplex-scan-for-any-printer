@@ -11,8 +11,9 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <h3>Images ({{ images.length }})</h3>
+        <button class="btn-clear-all" @click="clearAllEdits" title="Clear all edits">Reset All</button>
         <div class="save-status">
-          <span v-if="isDirty" class="unsaved">⚠️ Unsaved</span>
+          <span v-if="projectDirty" class="unsaved">⚠️ Unsaved</span>
           <span v-else class="saved">✓ Saved</span>
         </div>
       </div>
@@ -26,14 +27,14 @@
           @click="selectImage(index)"
         >
           <img :src="getThumbnailUrl(image.filename)" :alt="`Image ${index + 1}`" />
-          <span class="thumb-number">{{ index + 1 }}</span>
+          <span :class="['thumb-number', { dirty: image._dirty }]">{{ index + 1 }}</span>
         </div>
       </div>
     </aside>
 
     <!-- Main canvas -->
     <main class="canvas-area">
-      <div class="canvas-wrapper">
+      <div class="canvas-wrapper" ref="canvasWrapper">
         <canvas ref="mainCanvas" class="main-canvas"></canvas>
       </div>
       
@@ -91,7 +92,9 @@
           min="-15"
           max="15"
           step="0.1"
+          @mousedown="startRotationAdjust"
           @input="handleAdjustment"
+          @mouseup="finishRotationAdjust"
         />
         <span>{{ currentRotation.toFixed(1) }}°</span>
       </div>
@@ -153,7 +156,7 @@
   <!-- Footer actions -->
   <footer v-if="images.length > 0" class="editor-footer">
     <button @click="$emit('back')" class="btn-back">← Back</button>
-    <button @click="handleSave" class="btn-save" :disabled="!isDirty">
+    <button @click="handleSave" class="btn-save" :disabled="!projectDirty">
       💾 Save Changes
     </button>
     <button @click="showGenerateModal = true" class="btn-generate">
