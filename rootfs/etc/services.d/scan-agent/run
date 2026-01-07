@@ -1,0 +1,17 @@
+#!/usr/bin/with-contenv bash
+# ==============================================================================
+# Start Scan Agent
+# Auto-restarts if crashes
+# ==============================================================================
+
+echo "[INFO] Starting Scan Agent service..."
+
+cd /app
+
+# Wait for FTP server to be ready
+sleep 3
+
+echo "[INFO] Scan Agent ready to process files"
+
+# Run scan agent (S6 will restart if it crashes)
+exec python3 -m src.main --config /data/config.yaml

@@ -1,0 +1,17 @@
+# Icon for Home Assistant Add-on
+# This is a placeholder - replace with actual 128x128 PNG icon
+
+To create the icon:
+1. Create a 128x128 PNG image with your scanner/document icon
+2. Name it `icon.png`
+3. Place it in the root directory of this addon
+
+Recommended icon themes:
+- Material Design Icons (mdi:scanner)
+- Simple scanner with document
+- Colors: Blue/Green for tech feel
+
+Or use online icon generators:
+- https://www.flaticon.com/
+- https://icons8.com/
+- Canva (free design tool)

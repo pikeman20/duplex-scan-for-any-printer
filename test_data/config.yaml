@@ -1,0 +1,34 @@
+# Auto-generated from Home Assistant addon options
+scan_inbox_base: /share/scan_inbox
+scan_output_dir: /share/scan_out
+checkpoint_dir: /data/checkpoints
+retention_days: 7
+
+scan_modes:
+  scan_duplex:
+    enabled: true
+    auto_print: false
+    duplex: true
+    
+  scan_document:
+    enabled: true
+    auto_print: false
+    
+  copy_duplex:
+    enabled: true
+    auto_print: false
+    duplex: true
+    
+  card_2in1:
+    enabled: true
+    auto_print: false
+
+image_processing:
+  enable_background_removal: true
+  enable_depth_anything: true
+  max_workers: 2
+
+printer:
+  name: 
+  ip: 192.168.100.60
+  enabled: true

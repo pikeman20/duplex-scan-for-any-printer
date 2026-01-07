@@ -1,0 +1,7 @@
+#!/usr/bin/execlineb -S0
+# ==============================================================================
+# Scan Agent finish script
+# Called when service stops
+# ==============================================================================
+
+s6-echo "[finish] Scan Agent stopped"

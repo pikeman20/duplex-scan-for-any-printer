@@ -1,0 +1,107 @@
+{
+  "name": "Scan Agent",
+  "version": "1.0.0",
+  "slug": "scan-agent",
+  "description": "Brother Scanner FTP receiver with automatic PDF generation and duplex printing support",
+  "arch": ["armhf", "armv7", "aarch64", "amd64", "i386"],
+  "startup": "application",
+  "boot": "auto",
+  "init": false,
+  "ports": {
+    "2121/tcp": 2121,
+    "30000-30009/tcp": null
+  },
+  "ports_description": {
+    "2121/tcp": "FTP control port for scanner uploads",
+    "30000-30009/tcp": "FTP passive mode data ports"
+  },
+  "map": [
+    "config:rw",
+    "share:rw"
+  ],
+  "options": {
+    "log_level": "info",
+    "ftp": {
+      "username": "",
+      "password": ""
+    },
+    "scan_modes": {
+      "scan_duplex": {
+        "enabled": true,
+        "auto_print": false,
+        "duplex": true
+      },
+      "scan_document": {
+        "enabled": true,
+        "auto_print": false
+      },
+      "copy_duplex": {
+        "enabled": true,
+        "auto_print": true,
+        "duplex": true
+      },
+      "card_2in1": {
+        "enabled": true,
+        "auto_print": false
+      }
+    },
+    "printer": {
+      "name": "",
+      "ip": "",
+      "enabled": false
+    },
+    "image_processing": {
+      "enable_background_removal": true,
+      "enable_depth_anything": true,
+      "max_workers": 2
+    },
+    "retention_days": 7
+  },
+  "schema": {
+    "log_level": "list(trace|debug|info|warning|error)?",
+    "ftp": {
+      "username": "str?",
+      "password": "password?"
+    },
+    "scan_modes": {
+      "scan_duplex": {
+        "enabled": "bool",
+        "auto_print": "bool",
+        "duplex": "bool"
+      },
+      "scan_document": {
+        "enabled": "bool",
+        "auto_print": "bool"
+      },
+      "copy_duplex": {
+        "enabled": "bool",
+        "auto_print": "bool",
+        "duplex": "bool"
+      },
+      "card_2in1": {
+        "enabled": "bool",
+        "auto_print": "bool"
+      }
+    },
+    "printer": {
+      "name": "str?",
+      "ip": "str?",
+      "enabled": "bool"
+    },
+    "image_processing": {
+      "enable_background_removal": "bool",
+      "enable_depth_anything": "bool",
+      "max_workers": "int(1,8)"
+    },
+    "retention_days": "int(1,30)"
+  },
+  "image": "ghcr.io/yourusername/hassio-scan-agent-{arch}",
+  "url": "https://github.com/yourusername/hassio-scan-agent",
+  "ingress": false,
+  "panel_icon": "mdi:scanner",
+  "hassio_api": true,
+  "homeassistant_api": false,
+  "host_network": false,
+  "full_access": false,
+  "apparmor": true
+}

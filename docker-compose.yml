@@ -1,0 +1,109 @@
+version: '3.8'
+
+services:
+  scan-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scan-agent:latest
+    container_name: scan-agent
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Environment variables
+    environment:
+      # Paths
+      - SCAN_INBOX_BASE=/scan_inbox
+      - SCAN_OUTPUT_DIR=/scan_out
+      
+      # Python settings
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      
+      # Optional: Set log level
+      - LOG_LEVEL=INFO
+    
+    # Volume mounts
+    volumes:
+      # Inbox directory for scanned files (FTP upload target)
+      - ./scan_inbox:/scan_inbox
+      
+      # Output directory for generated PDFs
+      - ./scan_out:/scan_out
+      
+      # Configuration (optional override)
+      - ./config.yaml:/app/config.yaml:ro
+      
+      # Model checkpoints (required, large files)
+      - ./checkpoints:/app/checkpoints:ro
+      
+      # Optional: Logs persistence (if needed for debugging)
+      # - ./logs:/app/logs
+    
+    # Network ports
+    ports:
+      # FTP server port (if using built-in FTP)
+      - "2121:2121"
+    
+    # Network mode for CUPS printer access
+    # Use 'host' if you need to access local network printers
+    # network_mode: host
+    
+    # Resource limits (adjust for Raspberry Pi)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/scan_inbox') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: FTP server (if not using built-in)
+  ftp-server:
+    image: stilliard/pure-ftpd
+    container_name: scan-ftp
+    restart: unless-stopped
+    
+    ports:
+      - "21:21"
+      - "30000-30009:30000-30009"
+    
+    volumes:
+      - ./scan_inbox:/home/ftpuser/scan_inbox
+    
+    environment:
+      - PUBLICHOST=localhost
+      - FTP_USER_NAME=scanuser
+      - FTP_USER_PASS=scanpass
+      - FTP_USER_HOME=/home/ftpuser
+    
+    # Uncomment if you want to use external FTP server
+    # profiles:
+    #   - ftp
+
+# Volumes (optional: use named volumes instead of bind mounts)
+# volumes:
+#   scan_inbox:
+#   scan_out:
+
+# Networks (optional: custom network)
+# networks:
+#   scan_network:
+#     driver: bridge

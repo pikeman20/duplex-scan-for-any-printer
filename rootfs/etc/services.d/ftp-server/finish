@@ -1,0 +1,7 @@
+#!/usr/bin/execlineb -S0
+# ==============================================================================
+# FTP Server finish script
+# Called when service stops
+# ==============================================================================
+
+s6-echo "[finish] FTP server stopped"
