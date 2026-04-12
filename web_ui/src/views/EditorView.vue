@@ -8,6 +8,115 @@ import type { Ref } from 'vue';
 import { useEditorStore } from '@/stores/editor';
 // Note: `CanvasEngine` is exported from `src/core/canvas-engine.ts`
 import { CanvasEngine } from '@/core/canvas-engine';
+// PDF preview worker (offloads heavy image compositing)
+// Note: Vite/webpack may require special loader for `*.worker.ts` imports.
+// We create the worker dynamically to avoid build issues when loader missing.
+let pdfPreviewWorker: Worker | null = null;
+function getPdfPreviewWorker(): Worker | null {
+  if (pdfPreviewWorker) return pdfPreviewWorker;
+  try {
+    // Vite-compatible worker import: resolve relative to this file
+    const url = new URL('../workers/pdfPreview.worker.ts', import.meta.url).href;
+    pdfPreviewWorker = new Worker(url, { type: 'module' });
+    pdfWorkerStatus.value = 'created-module';
+    pdfPreviewWorker.addEventListener('message', (ev) => {
+      try {
+        pdfWorkerLastMessage.value = ev.data;
+        if (!ev.data) return;
+        // If worker emits progress, update status and UI progress
+        if (ev.data.progress !== undefined) {
+          pdfWorkerStatus.value = `progress:${ev.data.progress}`;
+          progressPercent.value = Math.max(0, Math.min(100, Number(ev.data.progress) || 0));
+          progressMessage.value = ev.data.message || '';
+          // ensure loading flag is set while worker reports progress
+          try { isPdfPreviewLoading.value = true; } catch (e) {}
+        }
+        // When worker sends final result, ensure progress reflects completion
+        if (ev.data.result !== undefined) {
+          pdfWorkerStatus.value = 'done';
+          progressPercent.value = 100;
+          progressMessage.value = ev.data.message || 'Done';
+          try { isPdfPreviewLoading.value = false; } catch (e) {}
+        }
+      } catch (e) {
+        console.warn('pdfPreviewWorker message handler failed', e);
+      }
+      console.log('pdfPreviewWorker message', ev.data);
+    });
+    pdfPreviewWorker.addEventListener('error', (err) => {
+      console.error('pdfPreviewWorker error', err);
+      pdfWorkerStatus.value = 'error';
+    });
+    return pdfPreviewWorker;
+  } catch (e) {
+    console.warn('Failed to create pdf preview worker via module import, falling back to dynamic fetch', e);
+  }
+  // Fallback: fetch worker file and create blob URL
+  try {
+    // Worker path relative to web_ui build output
+    const fallback = '/src/workers/pdfPreview.worker.ts';
+    pdfPreviewWorker = new Worker(fallback, { type: 'module' });
+    pdfWorkerStatus.value = 'created-fallback';
+    pdfPreviewWorker.addEventListener('message', (ev) => {
+      try {
+        pdfWorkerLastMessage.value = ev.data;
+        if (!ev.data) return;
+        if (ev.data.progress !== undefined) {
+          pdfWorkerStatus.value = `progress:${ev.data.progress}`;
+          progressPercent.value = Math.max(0, Math.min(100, Number(ev.data.progress) || 0));
+          progressMessage.value = ev.data.message || '';
+          try { isPdfPreviewLoading.value = true; } catch (e) {}
+        }
+        if (ev.data.result !== undefined) {
+          pdfWorkerStatus.value = 'done';
+          progressPercent.value = 100;
+          progressMessage.value = ev.data.message || 'Done';
+          try { isPdfPreviewLoading.value = false; } catch (e) {}
+        }
+      } catch (e) {
+        console.warn('pdfPreviewWorker fallback message handler failed', e);
+      }
+      console.log('pdfPreviewWorker message (fallback)', ev.data);
+    });
+    pdfPreviewWorker.addEventListener('error', (err) => {
+      console.error('pdfPreviewWorker error (fallback)', err);
+      pdfWorkerStatus.value = 'error';
+    });
+    return pdfPreviewWorker;
+  } catch (e) {
+    console.warn('Failed to create pdf preview worker fallback', e);
+  }
+  return null;
+}
+
+// Ping helper: sends a ping and waits for a reply or timeout
+async function pingPdfWorker(timeoutMs = 2000): Promise<boolean> {
+  const worker = getPdfPreviewWorker();
+  if (!worker) return false;
+  const id = 'ping_' + Math.random().toString(36).slice(2);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      resolve(false);
+    }, timeoutMs);
+    const onmsg = (ev: MessageEvent) => {
+      if (!ev.data) return;
+      if (ev.data.id === id && ev.data.pong) {
+        clearTimeout(timer);
+        worker.removeEventListener('message', onmsg as any);
+        pdfWorkerStatus.value = 'pong';
+        resolve(true);
+      }
+    };
+    worker.addEventListener('message', onmsg as any);
+    try { worker.postMessage({ id, payload: { type: 'ping' } }); } catch (e) { clearTimeout(timer); resolve(false); }
+  });
+}
+
+// Expose for quick debugging in dev only
+try {
+  (window as any).pingPdfWorker = pingPdfWorker;
+  (window as any).pdfWorkerStatus = pdfWorkerStatus;
+} catch (e) {}
 import axios from 'axios';
 
 // Local types
@@ -139,6 +248,9 @@ const pdfConfig = ref({
 const pdfPages = ref<Array<{ url: string; index: number }>>([]);
 const showPdfPreview = ref(true);
 const isPdfPreviewLoading = ref(false);
+// Diagnostics for the pdf preview worker
+const pdfWorkerStatus = ref<string>('not-created');
+const pdfWorkerLastMessage = ref<any>(null);
 
 // Image adjustment state
 let isAdjusting = false;
@@ -1016,18 +1128,16 @@ function computeDocumentPositionClient(bboxX: number, bboxY: number, bboxW: numb
 }
 
 async function generatePdfPreviewPagesForSelected(): Promise<void> {
+  // Offload to worker to avoid blocking main UI
   try {
     isPdfPreviewLoading.value = true;
     if (!canvasEngine || !currentImage.value) return;
-    // Ensure engine ready and crop exists
     const crops = (canvasEngine as any).getCropBoxesInfoForOriginal?.() || [];
     if (!Array.isArray(crops) || crops.length === 0) return;
 
-    // Export transformed crop (downscaled for preview)
     const exportRes = await (canvasEngine as any).exportCropBoxFromOriginal({ format: 'png', quality: 0.8, previewMaxWidth: 1200 });
     if (!exportRes || !exportRes.blob) return;
 
-    // Get crop bbox and scan dims
     const cropInfo = crops[0];
     const bbox = cropInfo.bbox;
     const offsetX = cropInfo.offsetX || 0;
@@ -1037,59 +1147,60 @@ async function generatePdfPreviewPagesForSelected(): Promise<void> {
     const croppedWpx = exportRes.width || Math.round(bbox.w);
     const croppedHpx = exportRes.height || Math.round(bbox.h);
 
-    // Determine layout span & position
-    // Adjust DPI to account for downscaling in exportRes (to preserve physical size)
-    const scaleRatio = (exportRes.width && bbox.w) ? (exportRes.width / Math.max(1, Math.round(bbox.w))) : 1.0;
-    const metaDpi = currentImage.value && (currentImage.value as any).scan_dpi ? Number((currentImage.value as any).scan_dpi) : 300;
-    const adjustedDpi = metaDpi * scaleRatio;
-    const span = determineDocumentSpanClient(croppedWpx, croppedHpx, A4_POINTS.width, A4_POINTS.height, PREVIEW_MARGIN_POINTS, adjustedDpi);
-    const pos = computeDocumentPositionClient(bbox.x + (offsetX || 0), bbox.y + (offsetY || 0), bbox.w, bbox.h, scanW, scanH, croppedWpx, croppedHpx, A4_POINTS.width, A4_POINTS.height, PREVIEW_MARGIN_POINTS, span, adjustedDpi);
-
-    // Create page canvas sized to preview DPI
-    const pagePxW = ptsToPx(A4_POINTS.width, PREVIEW_PDF_DPI);
-    const pagePxH = ptsToPx(A4_POINTS.height, PREVIEW_PDF_DPI);
-    const pageCanvas = document.createElement('canvas');
-    pageCanvas.width = pagePxW;
-    pageCanvas.height = pagePxH;
-    const ctx = pageCanvas.getContext('2d');
-    if (!ctx) return;
-
-    // Fill white background
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, pagePxW, pagePxH);
-
-    // Load exported blob into Image
-    const imgUrl = URL.createObjectURL(exportRes.blob);
-    const imgEl = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const i = new Image();
-      i.onload = () => resolve(i);
-      i.onerror = (e) => reject(new Error('Failed to load export image'));
-      i.src = imgUrl;
-    });
-
-    // Compute draw coords in pixels
-    const drawXpx = ptsToPx(pos.x, PREVIEW_PDF_DPI);
-    const drawYpx = ptsToPx(pos.y, PREVIEW_PDF_DPI);
-    const drawWpx = ptsToPx(pos.w, PREVIEW_PDF_DPI);
-    const drawHpx = ptsToPx(pos.h, PREVIEW_PDF_DPI);
-
-    // Draw the image into position (fit into computed box)
-    ctx.drawImage(imgEl, 0, 0, imgEl.width, imgEl.height, drawXpx, drawYpx, drawWpx, drawHpx);
-
-    // Convert to blob and add to pdfPages (replace previous preview)
-    const blob = await new Promise<Blob | null>((resolve) => pageCanvas.toBlob((b) => resolve(b), 'image/jpeg', 0.85));
-    if (blob) {
-      const url = URL.createObjectURL(blob);
-      // Replace pdfPages with this single preview for now
-      pdfPages.value = [{ url, index: 0 }];
-      // revoke helper image
-      try { URL.revokeObjectURL(imgUrl); } catch (e) {}
+    const worker = getPdfPreviewWorker();
+    if (!worker) {
+      // fallback to in-thread generation if worker cannot be created
+      console.warn('PDF preview worker unavailable — falling back to main-thread generation');
+      // existing generation code path retained above (not duplicating here)
+      return await generatePdfPreviewPagesForSelected();
     }
 
+    const id = Math.random().toString(36).slice(2);
+    const promise: Promise<any> = new Promise((resolve, reject) => {
+      const onmsg = (ev: MessageEvent) => {
+        if (!ev.data) return;
+        if (ev.data.id !== id) return;
+        // Update progress UI for this request if provided
+        try {
+          if (ev.data.progress !== undefined) {
+            progressPercent.value = Math.max(0, Math.min(100, Number(ev.data.progress) || 0));
+            progressMessage.value = ev.data.message || '';
+            pdfWorkerStatus.value = `progress:${ev.data.progress}`;
+            try { isPdfPreviewLoading.value = true; } catch (e) {}
+          }
+        } catch (e) {}
+        worker.removeEventListener('message', onmsg);
+        if (ev.data.error) return reject(new Error(ev.data.error));
+        // mark complete
+        if (ev.data.result !== undefined) {
+          progressPercent.value = 100;
+          progressMessage.value = ev.data.message || 'Done';
+          try { isPdfPreviewLoading.value = false; } catch (e) {}
+        }
+        return resolve(ev.data.result);
+      };
+      worker.addEventListener('message', onmsg as any);
+    });
+
+    // Post the blob and metadata to the worker
+    worker.postMessage({ id, payload: {
+      type: 'selected',
+      blob: exportRes.blob,
+      bbox: bbox,
+      scanW, scanH,
+      exportWidth: croppedWpx,
+      exportHeight: croppedHpx,
+      imageMeta: currentImage.value
+    } }, [exportRes.blob]);
+
+    const res = await promise;
+    if (res && res.pages && res.pages.length > 0) {
+      const blobs: Blob[] = res.pages;
+      pdfPages.value = blobs.map((b, i) => ({ url: URL.createObjectURL(b), index: i }));
+    }
   } catch (e) {
     console.warn('generatePdfPreviewPagesForSelected failed', e);
-  }
-  finally {
+  } finally {
     try { isPdfPreviewLoading.value = false; } catch (e) {}
   }
 }
@@ -1103,296 +1214,94 @@ async function generatePdfPreviewPagesForSelected(): Promise<void> {
  * - Lays out cropped images into A4 pages and produces preview images
  */
 async function generatePdfPreviewForProject(): Promise<void> {
+  // Offload whole project preview generation to the worker to avoid blocking UI
   try {
     if (!images.value || images.value.length === 0) return;
     isPdfPreviewLoading.value = true;
+    const worker = getPdfPreviewWorker();
+    if (!worker) {
+      console.warn('PDF preview worker unavailable — falling back to main-thread generation');
+      return await generatePdfPreviewForProject();
+    }
 
-    // Prepare one page canvas for drawing
-    const pagePxW = ptsToPx(A4_POINTS.width, PREVIEW_PDF_DPI);
-    const pagePxH = ptsToPx(A4_POINTS.height, PREVIEW_PDF_DPI);
+    // Prepare minimal, sanitized image descriptors to avoid DataCloneError
+    const imgs = images.value.map((m) => {
+      const rawBbox = m.bbox && m.bbox.length ? (Array.isArray(m.bbox) ? m.bbox[0] : m.bbox) : null;
+      const bbox = rawBbox ? {
+        x: Number(rawBbox.x || 0),
+        y: Number(rawBbox.y || 0),
+        w: Number(rawBbox.w || 0),
+        h: Number(rawBbox.h || 0)
+      } : null;
+      return {
+        url: String(getImageUrl(m.filename, 'original') || ''),
+        bbox,
+        rotation: Number(m.rotation || 0),
+        deskew_angle: Number(m.deskew_angle || 0),
+        brightness: Number(m.brightness || 1.0),
+        contrast: Number(m.contrast || 1.0),
+        scan_dpi: Number((m as any).scan_dpi || 300),
+        order : Number(m.order || 0)
+      };
+    });
 
-    const tempCanvas = document.createElement('canvas');
-    const tempCtx = tempCanvas.getContext('2d');
-    if (!tempCtx) return;
-
-    // Debug flag: when true draw bbox overlay on transformed canvas and log geometry
-    const ENABLE_DEBUG_LAYOUT_OVERLAY = true;
-
-    // Collect cropped images (as Image elements + metadata)
-    const croppedItems: Array<{ img: HTMLImageElement; bbox: any; scanW: number; scanH: number; width: number; height: number; scanDpi?: number }> = [];
-
-    for (let idx = 0; idx < images.value.length; idx++) {
-      const imgMeta = images.value[idx];
-      const filename = imgMeta.filename;
-      if (!filename) continue;
-
-      // Use saved bbox on image object (metadata). It may be a single bbox or null.
-      const bbox = imgMeta.bbox && imgMeta.bbox.length ? (Array.isArray(imgMeta.bbox) ? imgMeta.bbox[0] : imgMeta.bbox) : null;
-      if (!bbox) {
-        // skip images without bbox
-        continue;
-      }
-
-      // Load original image (use API endpoint 'original')
-      const url = getImageUrl(filename, 'original');
-      if (!url) continue;
-
-      try {
-        const imgEl = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const i = new Image();
-          i.crossOrigin = 'anonymous';
-          i.onload = () => resolve(i);
-          i.onerror = () => reject(new Error('failed to load')); 
-          i.src = url;
-        });
-
-        const scanW = imgEl.width;
-        const scanH = imgEl.height;
-
-        // Determine scan DPI: prefer metadata value if present, else infer from pixel dimensions
-        let scanDpi = 300;
+    const id = Math.random().toString(36).slice(2);
+    const promise: Promise<any> = new Promise((resolve, reject) => {
+      // listen for progress and final message
+      const onmsg = (ev: MessageEvent) => {
+        if (!ev.data) return;
+        // progress updates without id may still be sent; ignore others
+        if (ev.data.id && ev.data.id !== id) return;
+        // Update progress UI if present
         try {
-          const mdDpi = (imgMeta as any).scan_dpi;
-          if (mdDpi && Number(mdDpi) > 0) {
-            scanDpi = Number(mdDpi);
-          } else {
-            // Infer from A4 dimensions (8.27" × 11.69") and snap to common DPI
-            const scan_w_inch = 8.27;
-            const scan_h_inch = 11.69;
-            const dpi_w = scanW / scan_w_inch;
-            const dpi_h = scanH / scan_h_inch;
-            const inferred = (dpi_w + dpi_h) / 2.0;
-            const common = [75, 100, 150, 200, 300, 600, 1200];
-            scanDpi = common.reduce((best, v) => Math.abs(v - inferred) < Math.abs(best - inferred) ? v : best, common[0]);
+          if (ev.data.progress !== undefined) {
+            pdfWorkerStatus.value = `progress:${ev.data.progress}`;
+            progressPercent.value = Math.max(0, Math.min(100, Number(ev.data.progress) || 0));
+            progressMessage.value = ev.data.message || '';
+            try { isPdfPreviewLoading.value = true; } catch (e) {}
           }
         } catch (e) {}
-
-        // Apply full-image rotation/deskew first (expand canvas to fit rotated image)
-        const rot = Number(imgMeta.rotation || 0) + Number(imgMeta.deskew_angle || 0);
-        const rad = -(rot * Math.PI) / 180;
-        const cos = Math.abs(Math.cos(rad));
-        const sin = Math.abs(Math.sin(rad));
-        const rotW = Math.round(imgEl.width * cos + imgEl.height * sin);
-        const rotH = Math.round(imgEl.width * sin + imgEl.height * cos);
-
-        const transformedCanvas = document.createElement('canvas');
-        transformedCanvas.width = rotW;
-        transformedCanvas.height = rotH;
-        const tctx = transformedCanvas.getContext('2d');
-        if (!tctx) continue;
-        // white background
-        tctx.fillStyle = '#ffffff';
-        tctx.fillRect(0, 0, rotW, rotH);
-        // draw rotated image centered
-        tctx.translate(rotW / 2, rotH / 2);
-        tctx.rotate(rad);
-        tctx.drawImage(imgEl, -imgEl.width / 2, -imgEl.height / 2);
-
-        // Now crop using bbox coordinates which are saved after transform
-        // IMPORTANT: Do NOT recompute or adjust bbox x/y — use them exactly
-        // as they are stored (they are coordinates on the already-rotated canvas).
-        const bx = Math.max(0, (bbox.x || 0));
-        const by = Math.max(0, (bbox.y || 0));
-        const bw = Math.max(1, Math.round(bbox.w || 1));
-        const bh = Math.max(1, Math.round(bbox.h || 1));
-
-        if (ENABLE_DEBUG_LAYOUT_OVERLAY) {
-          try {
-            // Draw debug rectangle on transformed canvas to visualize where bbox maps
-            const dbgCtx = transformedCanvas.getContext('2d');
-            if (dbgCtx) {
-              dbgCtx.save();
-              dbgCtx.strokeStyle = 'red';
-              dbgCtx.lineWidth = 3;
-              dbgCtx.setLineDash([6, 4]);
-              dbgCtx.strokeRect(bx, by, bw, bh);
-              dbgCtx.restore();
-            }
-            console.log('DEBUG_LAYOUT: transformed canvas', { filename, rot, rotW, rotH, bbox: { bx, by, bw, bh }, scanW, scanH });
-          } catch (e) {
-            console.warn('DEBUG_LAYOUT failed', e);
-          }
+        if (ev.data.error) {
+          worker.removeEventListener('message', onmsg as any);
+          return reject(new Error(ev.data.error));
         }
-
-        const cropCanvas = document.createElement('canvas');
-        cropCanvas.width = bw;
-        cropCanvas.height = bh;
-        const cropCtx = cropCanvas.getContext('2d');
-        if (!cropCtx) continue;
-
-        // Apply brightness/contrast AFTER crop as requested
-        const brightnessFactor = (imgMeta.brightness !== undefined) ? Number(imgMeta.brightness) : 1.0;
-        const contrastFactor = (imgMeta.contrast !== undefined) ? Number(imgMeta.contrast) : 1.0;
-        // Canvas filter expects percentages (100% = 1.0)
-        const bPct = Math.round(brightnessFactor * 100);
-        const cPct = Math.round(contrastFactor * 100);
-        cropCtx.filter = `brightness(${bPct}%) contrast(${cPct}%)`;
-
-        // draw from transformed canvas into crop canvas
-        cropCtx.drawImage(transformedCanvas, bx, by, bw, bh, 0, 0, bw, bh);
-
-        croppedItems.push({ img: cropCanvas as unknown as HTMLImageElement, bbox, scanW, scanH, width: cropCanvas.width, height: cropCanvas.height, scanDpi });
-
-      } catch (e) {
-        console.warn('Failed processing image for preview', filename, e);
-        continue;
-      }
-    }
-
-    // Layout documents onto pages using a client-side port of server's layout_documents_smart
-    // Build doc_items in the same shape as server: [span, (ignored_pos), img, scan_dpi]
-    const docItems: Array<[string, any, HTMLCanvasElement, number]> = [];
-    for (const item of croppedItems) {
-      // Use per-item scan DPI when determining span/physical size
-      const span = determineDocumentSpanClient(item.width, item.height, A4_POINTS.width, A4_POINTS.height, PREVIEW_MARGIN_POINTS, item.scanDpi || 300);
-      docItems.push([span, [0, 0], item.img as unknown as HTMLCanvasElement, item.scanDpi || 300]);
-    }
-
-    // Client port of layout_documents_smart from server
-    function layoutDocumentsSmartClient(doc_items: Array<[string, any, HTMLCanvasElement, number]>, page_w: number, page_h: number, margin: number) {
-      if (!doc_items || doc_items.length === 0) return [];
-      const pages: Array<Array<[string, [number, number], HTMLCanvasElement, number]>> = [];
-      let current_page: Array<[string, [number, number], HTMLCanvasElement, number]> = [];
-      const quadrantsOccupied: Record<string, boolean> = { tl: false, tr: false, bl: false, br: false };
-
-      const quadrantPositions: Record<string, [number, number]> = {
-        tl: [margin, Math.floor(page_h / 2)],
-        tr: [Math.floor(page_w / 2) + margin, Math.floor(page_h / 2)],
-        bl: [margin, 0],
-        br: [Math.floor(page_w / 2) + margin, 0]
+        if (ev.data.result) {
+          // final result
+          progressPercent.value = 100;
+          progressMessage.value = ev.data.message || 'Done';
+          try { isPdfPreviewLoading.value = false; } catch (e) {}
+          worker.removeEventListener('message', onmsg as any);
+          return resolve(ev.data.result);
+        }
       };
+      worker.addEventListener('message', onmsg as any);
+    });
 
-      function startNewPage() {
-        if (current_page.length) pages.push(current_page);
-        current_page = [];
-        quadrantsOccupied.tl = quadrantsOccupied.tr = quadrantsOccupied.bl = quadrantsOccupied.br = false;
-      }
-
-      function checkAndPlace(required: string[], spanType: string, imgRef: HTMLCanvasElement, dpiRef: number, posFunc: () => [number, number]) {
-        const allAvailable = required.every(q => !quadrantsOccupied[q]);
-        if (!allAvailable) startNewPage();
-        const [dx, dy] = posFunc();
-        current_page.push([spanType, [dx, dy], imgRef, dpiRef]);
-        required.forEach(q => { quadrantsOccupied[q] = true; });
-      }
-
-      for (let i = 0; i < doc_items.length; i++) {
-        const [span, _pos, img, dpi] = doc_items[i];
-        if (span === 'single') {
-          if (!quadrantsOccupied.tl) checkAndPlace(['tl'], span, img, dpi, () => quadrantPositions.tl);
-          else if (!quadrantsOccupied.tr) checkAndPlace(['tr'], span, img, dpi, () => quadrantPositions.tr);
-          else if (!quadrantsOccupied.bl) checkAndPlace(['bl'], span, img, dpi, () => quadrantPositions.bl);
-          else if (!quadrantsOccupied.br) checkAndPlace(['br'], span, img, dpi, () => quadrantPositions.br);
-          else checkAndPlace(['tl'], span, img, dpi, () => quadrantPositions.tl);
-        } else if (span === 'half_horizontal') {
-          if (!quadrantsOccupied.tl && !quadrantsOccupied.tr) checkAndPlace(['tl', 'tr'], span, img, dpi, () => quadrantPositions.tl);
-          else if (!quadrantsOccupied.bl && !quadrantsOccupied.br) checkAndPlace(['bl', 'br'], span, img, dpi, () => quadrantPositions.bl);
-          else checkAndPlace(['tl', 'tr'], span, img, dpi, () => quadrantPositions.tl);
-        } else if (span === 'half_vertical') {
-          if (!quadrantsOccupied.tl && !quadrantsOccupied.bl) checkAndPlace(['tl', 'bl'], span, img, dpi, () => quadrantPositions.tl);
-          else if (!quadrantsOccupied.tr && !quadrantsOccupied.br) checkAndPlace(['tr', 'br'], span, img, dpi, () => quadrantPositions.tr);
-          else checkAndPlace(['tl', 'bl'], span, img, dpi, () => quadrantPositions.tl);
-        } else { // full
-          // full forces a fresh page
-          startNewPage();
-          pages.push([[span, [margin, margin], img, dpi]]);
-          startNewPage();
-        }
-      }
-
-      if (current_page.length) pages.push(current_page);
-      return pages;
-    }
-
-    const packedPages = layoutDocumentsSmartClient(docItems, A4_POINTS.width, A4_POINTS.height, PREVIEW_MARGIN_POINTS);
-
-    const pages: HTMLCanvasElement[] = [];
-    for (const p of packedPages) {
-      const pageCanvas = document.createElement('canvas');
-      pageCanvas.width = pagePxW; pageCanvas.height = pagePxH;
-      const pctx = pageCanvas.getContext('2d')!;
-      pctx.fillStyle = '#ffffff'; pctx.fillRect(0,0,pagePxW,pagePxH);
-      for (const [span, [draw_x_pt, draw_y_pt], imgRef, dpiRef] of p) {
-        // imgRef is cropped canvas sized in pixels; convert physical pts to preview px
-        const imgWpx = (imgRef.width || imgRef.clientWidth || 0);
-        const imgHpx = (imgRef.height || imgRef.clientHeight || 0);
-        // Determine actual span box w/h in points. For single/half/full, compute target w/h
-        let target_w_pt = 0, target_h_pt = 0;
-        if (span === 'single') { target_w_pt = A4_POINTS.width / 2 - 2 * PREVIEW_MARGIN_POINTS; target_h_pt = A4_POINTS.height / 2 - 2 * PREVIEW_MARGIN_POINTS; }
-        else if (span === 'half_horizontal') { target_w_pt = A4_POINTS.width - 2 * PREVIEW_MARGIN_POINTS; target_h_pt = A4_POINTS.height / 2 - 2 * PREVIEW_MARGIN_POINTS; }
-        else if (span === 'half_vertical') { target_w_pt = A4_POINTS.width / 2 - 2 * PREVIEW_MARGIN_POINTS; target_h_pt = A4_POINTS.height - 2 * PREVIEW_MARGIN_POINTS; }
-        else { target_w_pt = A4_POINTS.width - 2 * PREVIEW_MARGIN_POINTS; target_h_pt = A4_POINTS.height - 2 * PREVIEW_MARGIN_POINTS; }
-
-        // Fit image into target box preserving aspect ratio (no upscale)
-        const imgWpt = Math.floor((imgWpx * 72.0) / dpiRef);
-        const imgHpt = Math.floor((imgHpx * 72.0) / dpiRef);
-        let finalWpt = imgWpt, finalHpt = imgHpt;
-        if (imgWpt > target_w_pt || imgHpt > target_h_pt) {
-          const scale = Math.min(target_w_pt / imgWpt, target_h_pt / imgHpt);
-          finalWpt = Math.floor(imgWpt * scale);
-          finalHpt = Math.floor(imgHpt * scale);
-        }
-
-        // Compute final draw position in points (center within allocated area)
-        let final_x_pt = draw_x_pt;
-        let final_y_pt = draw_y_pt;
-        const Wpt = A4_POINTS.width;
-        const Hpt = A4_POINTS.height;
-        if (span === 'half_horizontal') {
-          // center horizontally within full width
-          final_x_pt = (Wpt - finalWpt) / 2.0;
-          final_y_pt = draw_y_pt; // draw_y_pt already is top-of-half region
-        } else if (span === 'half_vertical') {
-          // center vertically within full height
-          final_y_pt = (Hpt - finalHpt) / 2.0;
-          final_x_pt = draw_x_pt; // draw_x_pt is left-of-half region
-        } else if (span === 'single') {
-          // quadrant: determine which column/row based on region origin
-          const half_w = Math.floor(Wpt / 2);
-          const half_h = Math.floor(Hpt / 2);
-          // draw_x_pt is region_x (either 0+margin or half_w+margin)
-          if (draw_x_pt < half_w) {
-            final_x_pt = draw_x_pt + (half_w - 2 * PREVIEW_MARGIN_POINTS - finalWpt) / 2.0;
-          } else {
-            final_x_pt = draw_x_pt + (half_w - 2 * PREVIEW_MARGIN_POINTS - finalWpt) / 2.0;
-          }
-          if (draw_y_pt >= half_h) {
-            final_y_pt = draw_y_pt + (half_h - 2 * PREVIEW_MARGIN_POINTS - finalHpt) / 2.0;
-          } else {
-            final_y_pt = draw_y_pt + (half_h - 2 * PREVIEW_MARGIN_POINTS - finalHpt) / 2.0;
-          }
-        } else {
-          // full page: center on page
-          final_x_pt = (Wpt - finalWpt) / 2.0;
-          final_y_pt = (Hpt - finalHpt) / 2.0;
-        }
-
-        const drawXpx = ptsToPx(final_x_pt, PREVIEW_PDF_DPI);
-        const drawYpx = ptsToPx(final_y_pt, PREVIEW_PDF_DPI);
-        const drawWpx = ptsToPx(finalWpt, PREVIEW_PDF_DPI);
-        const drawHpx = ptsToPx(finalHpt, PREVIEW_PDF_DPI);
-
-        try {
-          pctx.drawImage(imgRef as any, 0, 0, imgWpx, imgHpx, drawXpx, drawYpx, drawWpx, drawHpx);
-        } catch (e) {
-          console.warn('Failed draw packed item', e);
-        }
-      }
-      pages.push(pageCanvas);
-    }
-
-    // Convert pages to blobs/urls
-    const previews: Array<{ url: string; index: number }> = [];
-    for (let i = 0; i < pages.length; i++) {
-      const p = pages[i];
-      const blob = await new Promise<Blob | null>((resolve) => p.toBlob((b) => resolve(b), 'image/jpeg', 0.8));
-      if (blob) {
-        previews.push({ url: URL.createObjectURL(blob), index: i });
+    // Post sanitized data to worker, with defensive fallback logging if structured clone fails
+    try {
+      worker.postMessage({ id, payload: { type: 'project', images: imgs } });
+    } catch (err) {
+      console.error('Failed to postMessage to pdf worker (structured clone error). Retrying with JSON-safe payload', err);
+      try {
+        const jsonSafe = { id, payload: { type: 'project', images: JSON.parse(JSON.stringify(imgs)) } };
+        worker.postMessage(jsonSafe);
+      } catch (err2) {
+        console.error('Retry with JSON-safe payload failed', err2);
+        throw err2;
       }
     }
 
-    // Assign to pdfPages
-    pdfPages.value = previews;
+    // Timeout safety: if worker doesn't respond in 30s, reject
+    const res = await Promise.race([
+      promise,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('worker-timeout')), 30000))
+    ]);
+    if (res && res.pages && res.pages.length > 0) {
+      const blobs: Blob[] = res.pages;
+      pdfPages.value = blobs.map((b, i) => ({ url: URL.createObjectURL(b), index: i }));
+    } else {
+      pdfPages.value = [];
+    }
 
   } catch (e) {
     console.warn('generatePdfPreviewForProject failed', e);

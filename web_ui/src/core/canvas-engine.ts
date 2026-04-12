@@ -357,17 +357,6 @@ export class CanvasEngine {
       console.debug('getCropBoxesInfoForOriginal: transform ready, but no crop boxes exist (valid state)')
       return []
     }
-    // Debug: surface important state for diagnosis
-    try {
-      console.group('getCropBoxesInfoForOriginal debug')
-      console.log('crop boxes count:', crops.length)
-      console.log('imgNode present:', !!imgNode)
-      console.log('originalDimensions:', this.originalDimensions)
-      const combinedScaleDbg = this.combinedScale || this.displayScale * this.imageScale
-      console.log('combinedScale:', combinedScaleDbg, 'displayScale:', this.displayScale, 'imageScale:', this.imageScale)
-    } catch (e) {
-      // ignore
-    }
 
     const combinedScale = this.combinedScale || this.displayScale * this.imageScale
     const displayScale = this.displayScale || 1
@@ -378,9 +367,6 @@ export class CanvasEngine {
 
     const topLeftX = imgNode.x() - rotatedW_UI / 2
     const topLeftY = imgNode.y() - rotatedH_UI / 2
-    try {
-      console.debug('getCropBoxesInfoForOriginal: imgNode attrs', { x: imgNode.x(), y: imgNode.y(), rotation: imgNode.rotation(), offsetX: imgNode.offsetX?.(), offsetY: imgNode.offsetY?.(), rotatedW_UI, rotatedH_UI, topLeftX, topLeftY })
-    } catch (e) {}
 
     const cropData = crops.map((rect: any) => {
       const localTL = rect.position()
@@ -398,9 +384,7 @@ export class CanvasEngine {
       const h = h_display / combinedScale
 
       const bbox = { x: x, y: y, w: w, h: h }
-      try {
-        console.log('crop debug:', { localTL, x_display, y_display, w_display, h_display, bbox })
-      } catch (e) {}
+
       return {
         bbox: bbox,
         offsetX: -topLeftX / combinedScale,
@@ -644,10 +628,6 @@ export class CanvasEngine {
     this.stage.scale({ x: 1, y: 1 })
     this.stage.position({ x: 0, y: 0 })
 
-    try {
-      console.debug('getTransformedOriginalCanvas: before setAttrs', { originalAttrs, srcW, srcH, origScaleX, origScaleY, rotatedW, rotatedH })
-    } catch (e) {}
-
     // Set image attributes so Konva draws the node at the requested original pixel size
     this.currentImage.setAttrs({
       scaleX: origScaleX,
@@ -658,10 +638,6 @@ export class CanvasEngine {
       offsetY: srcH / 2,
       rotation
     })
-
-    try {
-      console.debug('getTransformedOriginalCanvas: after setAttrs', { x: this.currentImage.x(), y: this.currentImage.y(), offsetX: this.currentImage.offsetX(), offsetY: this.currentImage.offsetY(), scaleX: this.currentImage.scaleX(), scaleY: this.currentImage.scaleY(), rotation: this.currentImage.rotation() })
-    } catch (e) {}
 
     const canvas = this.imageLayer.toCanvas({ x: 0, y: 0, width: rotatedW, height: rotatedH, pixelRatio: 1 })
 
@@ -723,10 +699,10 @@ export class CanvasEngine {
         // in `getCropBoxesInfoForOriginal()` using the Konva node geometry.
         // Relying on a stored canvas `_meta` has proven fragile and can yield
         // incorrect base offsets; use the offsets returned with each crop.
-        let cropBoxX = crop.bbox.x + (crop.offsetX || 0)
-        let cropBoxY = crop.bbox.y + (crop.offsetY || 0)
-      let cropboxW = crop.bbox.w;
-      let cropboxH = crop.bbox.h;
+      const cropBoxX = crop.bbox.x + (crop.offsetX || 0)
+      const cropBoxY = crop.bbox.y + (crop.offsetY || 0)
+      const cropboxW = crop.bbox.w;
+      const cropboxH = crop.bbox.h;
 
       try {
         // Ensure we don't request pixels outside the source canvas

@@ -19,7 +19,7 @@ from agent.session_manager import Session
 cfg = Config.load("config.yaml")
 
 # Create mock session with scan_duplex mode
-scan_dir = Path("scan_inbox_to_test/scan_duplex")
+scan_dir = Path("scan_inbox/scan_duplex")
 images = sorted(scan_dir.glob("*.jpg"))
 
 if not images:

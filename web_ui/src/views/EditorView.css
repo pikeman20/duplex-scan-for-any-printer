@@ -573,6 +573,131 @@
   color: #666;
 }
 
+/* Inline small progress next to preview button */
+.inline-pdf-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 8px;
+}
+.inline-progress-bar {
+  width: 96px;
+  height: 8px;
+  background: #f0f0f0;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+}
+.inline-progress-bar > .inline-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: linear-gradient(90deg, #6366f1, #7c3aed);
+  transition: width 0.22s ease;
+}
+.inline-progress-text {
+  font-size: 12px;
+  color: #495057;
+  min-width: 36px;
+  text-align: right;
+}
+
+/* Floating indicator for project-wide PDF preview generation */
+.pdf-preview-indicator {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  background: #fff;
+  color: #222;
+  padding: 10px 14px;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(18,24,32,0.08);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 2500;
+  min-width: 220px;
+}
+.pdf-preview-indicator .pdf-icon {
+  flex: 0 0 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: #0f1724;
+  background: linear-gradient(180deg, #f8fafc, #eef2ff);
+  border-radius: 8px;
+  border: 1px solid #eef2ff;
+  font-size: 12px;
+}
+@keyframes pulse {
+  0% { transform: scale(1); opacity: 0.9 }
+  50% { transform: scale(1.3); opacity: 0.6 }
+  100% { transform: scale(1); opacity: 0.9 }
+}
+
+.pdf-preview-indicator .pdf-info {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pdf-preview-indicator .pdf-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #0f1724;
+}
+.pdf-preview-indicator .pdf-sub {
+  font-size: 12px;
+  color: #475569;
+}
+.pdf-preview-indicator .pdf-mini-progress {
+  --pct: 0%;
+  height: 6px;
+  width: 100%;
+  background: #f1f5f9;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+.pdf-preview-indicator .pdf-mini-progress .pdf-mini-fill {
+  height: 100%;
+  width: var(--pct);
+  background: linear-gradient(90deg, #6366f1, #7c3aed);
+  transition: width 0.25s ease;
+}
+.pdf-preview-indicator .pdf-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pdf-preview-indicator .pdf-percent {
+  font-size: 13px;
+  color: #0f1724;
+  font-weight: 600;
+}
+.pdf-preview-indicator .pdf-dismiss {
+  background: transparent;
+  border: none;
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #64748b;
+}
+.pdf-preview-indicator .pdf-dismiss:hover {
+  background: rgba(99,102,241,0.06);
+  color: #374151;
+}
+
+.progress-percent-text {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #333;
+}
+
 /* PDF Preview Section */
 .pdf-preview-section {
   background: white;

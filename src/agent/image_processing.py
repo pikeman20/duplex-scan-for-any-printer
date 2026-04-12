@@ -685,7 +685,7 @@ def rotate_with_auto_fill(image_path, angle, pad_size=20):
 
     return rotated_img
 
-def deskew_image(fileName: str, img: Image.Image) -> Image.Image:
+def deskew_image(fileName: str, img: Image.Image) -> Tuple[Image.Image, float]:
     """
     Correct skew/tilt in scanned document.
     
@@ -725,7 +725,8 @@ def deskew_image(fileName: str, img: Image.Image) -> Image.Image:
     if mean_intensity > 240 and content_density < 0.02:
         print(f"Deskewing '{os.path.basename(fileName)}': blank page, skipping.")
         del converted, img_small
-        return img
+        # Return a consistent tuple: (image, deskew_angle)
+        return img, 0.0
 
     # Get background color from edges (use downsampled image to save RAM)
     pad_size = 20
