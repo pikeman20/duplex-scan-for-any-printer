@@ -15,6 +15,7 @@ from PIL import Image, ImageEnhance
 import numpy as np
 from typing import Dict, Tuple, Optional
 import os
+import math
 
 
 def apply_brightness_contrast(img: Image.Image, brightness: int, contrast: int) -> Image.Image:
@@ -150,10 +151,19 @@ def apply_metadata_transforms(
     Returns:
         Transformed PIL Image ready for PDF generation
     """
-    # Load original image
+    # If OpenCV is available prefer the fast cv2 implementation
+    try:
+        import cv2
+        # Use the fast cv2 implementation
+        return apply_metadata_transforms_fast_cv2(img_path, metadata, apply_bbox_crop, target_dpi)
+    except Exception:
+        # Fall back to PIL implementation below
+        pass
+
+    # Load original image (PIL fallback)
     if not os.path.exists(img_path):
         raise FileNotFoundError(f"Image not found: {img_path}")
-    
+
     img = Image.open(img_path)
     
     # Store original DPI
@@ -189,6 +199,105 @@ def apply_metadata_transforms(
         img.info['dpi'] = original_dpi
     
     return img
+
+
+def apply_metadata_transforms_fast_cv2(
+    img_path: str,
+    metadata: Dict,
+    apply_bbox_crop: bool = True,
+    target_dpi: Optional[int] = None
+) -> Image.Image:
+    """
+    Fast implementation of apply_metadata_transforms using OpenCV.
+    Performs rotation, deskew, crop, brightness/contrast using cv2 (C-optimized).
+    Returns a PIL.Image for compatibility with existing code.
+    """
+    try:
+        import cv2
+    except Exception:
+        raise
+
+    if not os.path.exists(img_path):
+        raise FileNotFoundError(f"Image not found: {img_path}")
+
+    # Load image robustly (support Windows unicode paths)
+    try:
+        if os.name == 'nt':
+            arr = np.fromfile(img_path, dtype=np.uint8)
+            img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        else:
+            img_bgr = cv2.imread(img_path, cv2.IMREAD_COLOR)
+    except Exception:
+        img_bgr = None
+
+    if img_bgr is None:
+        raise IOError(f"Failed to load image via OpenCV: {img_path}")
+
+    # Convert BGR -> RGB
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+
+    def _rotate_cv2(img_np, angle_deg, expand=True, bg_color=(255, 255, 255)):
+        if angle_deg == 0:
+            return img_np
+        h, w = img_np.shape[:2]
+        cx, cy = w / 2.0, h / 2.0
+        M = cv2.getRotationMatrix2D((cx, cy), angle_deg, 1.0)
+        if expand:
+            cos = abs(M[0, 0]); sin = abs(M[0, 1])
+            nw = int((h * sin) + (w * cos))
+            nh = int((h * cos) + (w * sin))
+            M[0, 2] += (nw / 2.0) - cx
+            M[1, 2] += (nh / 2.0) - cy
+            dst = cv2.warpAffine(img_np, M, (nw, nh), flags=cv2.INTER_CUBIC, borderValue=bg_color)
+            return dst
+        else:
+            dst = cv2.warpAffine(img_np, M, (w, h), flags=cv2.INTER_CUBIC, borderValue=bg_color)
+            return dst
+
+    def _adjust_brightness_contrast_cv2(img_np, brightness=0, contrast=0):
+        # brightness, contrast in -100..100
+        if brightness == 0 and contrast == 0:
+            return img_np
+        beta = float(brightness) * 255.0 / 100.0
+        alpha = 1.0 + (float(contrast) / 100.0)
+        img_adj = cv2.convertScaleAbs(img_np, alpha=alpha, beta=beta)
+        return img_adj
+
+    # 1. Apply rotation (batch orientation)
+    rotation = float(metadata.get('rotation', 0) or 0)
+    if rotation != 0:
+        img_rgb = _rotate_cv2(img_rgb, rotation, expand=True, bg_color=(255, 255, 255))
+
+    # 2. Apply deskew (tilt correction)
+    deskew_angle = float(metadata.get('deskew_angle', 0.0) or 0.0)
+    if abs(deskew_angle) > 0.1:
+        img_rgb = _rotate_cv2(img_rgb, deskew_angle, expand=False, bg_color=(255, 255, 255))
+
+    # 3. Crop by bbox (after rotation/deskew)
+    if apply_bbox_crop and 'bbox' in metadata:
+        b = metadata['bbox']
+        x = int(b.get('x', 0))
+        y = int(b.get('y', 0))
+        w = int(b.get('w') or b.get('width') or 0)
+        h = int(b.get('h') or b.get('height') or 0)
+        # clamp
+        x = max(0, x); y = max(0, y)
+        w = max(1, min(w, img_rgb.shape[1] - x))
+        h = max(1, min(h, img_rgb.shape[0] - y))
+        img_rgb = img_rgb[y:y+h, x:x+w]
+
+    # 4. Brightness/contrast
+    brightness = int(metadata.get('brightness', 0) or 0)
+    contrast = int(metadata.get('contrast', 0) or 0)
+    if brightness != 0 or contrast != 0:
+        img_rgb = _adjust_brightness_contrast_cv2(img_rgb, brightness, contrast)
+
+    # 5. Convert to PIL and set DPI if requested
+    img_pil = Image.fromarray(img_rgb)
+    if target_dpi:
+        img_pil.info['dpi'] = (target_dpi, target_dpi)
+
+    return img_pil
 
 
 def get_transform_summary(metadata: Dict) -> str:

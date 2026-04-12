@@ -54,19 +54,24 @@ def generate_scan_document_metadata(
         
         simple_filename = os.path.basename(filename)
         
+        # Do not write out cropped images here. Instead reference the source
+        # filename which is expected to be present under the project's images
+        # directory (the caller `main.py` moves original scan files into the
+        # project folder before metadata generation).
+        project_filename = f"{simple_filename}"
+
         metadata["images"].append({
             "id": img_id,
             "source_file": simple_filename,
-            "filename": simple_filename,  # Simple filename for API access
-            "source_path": filename,  # Full path in scan_inbox for serving
+            "filename": project_filename,  # Project-local filename for API access
             "bbox": {
                 "x": bbox[0],
                 "y": bbox[1],
                 "w": img.width,
                 "h": img.height
             },
-            "rotation": rotation,  # Actual rotation applied (0 or 180)
-            "deskew_angle": round(deskew, 2),  # Actual deskew angle detected and applied
+            "rotation": rotation,
+            "deskew_angle": round(deskew, 2),
             "brightness": 1.0,
             "contrast": 1.0,
             "scan_dpi": dpi,
@@ -111,7 +116,8 @@ def generate_card_2in1_metadata(
     images: List[Image.Image],
     pages: List[List[Tuple[Tuple[int, int], Image.Image]]],
     deskew_angles: List[float],
-    output_dir: str
+    output_dir: str,
+    source_filenames: List[str] | None = None
 ) -> str:
     """
     Generate metadata JSON for card_2in1 project.
@@ -145,19 +151,22 @@ def generate_card_2in1_metadata(
     # Build image metadata
     import os
     for idx, img in enumerate(images):
-        # For card_2in1, images are cropped from scans, path will be in output_dir
-        image_filename = f"card_{idx}.jpg"
-        image_path = os.path.join(output_dir, image_filename)
         deskew_angle = deskew_angles[idx] if idx < len(deskew_angles) else 0.0
-        
+
+        # Prefer to reference the original scanned filename if provided by caller.
+        source_file = None
+        if source_filenames and idx < len(source_filenames):
+            source_file = os.path.basename(source_filenames[idx])
+
         metadata["images"].append({
             "id": f"img_{idx}",
             "source_index": idx,
-            "path": image_path,
+            "source_file": source_file,
+            "filename": source_file if source_file else f"img_{idx}",
             "width": img.width,
             "height": img.height,
-            "rotation": 0,  # card_2in1 doesn't use batch rotation
-            "deskew_angle": round(deskew_angle, 2),  # Actual deskew angle detected and applied
+            "rotation": 0,
+            "deskew_angle": round(deskew_angle, 2),
             "order": idx
         })
     
@@ -189,4 +198,67 @@ def generate_card_2in1_metadata(
         json.dump(metadata, f, indent=2)
     
     print(f"💾 Metadata saved: {metadata_path}")
+    return metadata_path
+
+
+def generate_scan_duplex_metadata(
+    session_id: str,
+    ordered_items: List[Tuple[str, Image.Image]],
+    rotation_info: List[Tuple[int, float]] | None,
+    out_dir: str
+) -> str:
+    """Generate metadata for duplex scans where each side is a page.
+
+    Args:
+        session_id: project id
+        ordered_items: list of (path, Image) tuples in final order (front/back paired)
+        out_dir: output dir to write metadata
+    Returns:
+        metadata path
+    """
+    metadata = {
+        "project_id": session_id,
+        "original_pdf": f"{session_id}.pdf",
+        "created": int(time.time()),
+        "updated": int(time.time()),
+        "mode": "scan_duplex",
+        "images": [],
+        "layout": {
+            "page_size": "A4",
+            "orientation": "portrait",
+            "positions": []
+        }
+    }
+
+    # Each ordered_item corresponds to a page side; store filename and basic dims
+    import os
+    for idx, (path, img) in enumerate(ordered_items):
+        base = os.path.basename(path)
+        rot = 0
+        deskew = 0.0
+        if rotation_info and idx < len(rotation_info):
+            try:
+                rot = int(rotation_info[idx][0])
+                deskew = float(rotation_info[idx][1])
+            except Exception:
+                rot = 0
+                deskew = 0.0
+
+        metadata['images'].append({
+            'id': f"img_{idx}",
+            'filename': base,
+            'source_file': base,
+            'page_index': idx,
+            'width': img.width,
+            'height': img.height,
+            'rotation': rot,
+            'deskew_angle': round(deskew, 2),
+            'order': idx
+        })
+
+    metadata_path = os.path.join(out_dir, f"{session_id}.json")
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+
+    print(f"💾 Duplex metadata saved: {metadata_path}")
     return metadata_path

@@ -154,17 +154,36 @@ async def update_project_metadata(
         if os.path.exists(metadata_path):
             import shutil
             shutil.copy2(metadata_path, backup_path)
-        
-        # Save updated metadata
-        with open(metadata_path, 'w', encoding='utf-8') as f:
-            json.dump(metadata, f, indent=2, ensure_ascii=False)
-        
-        return JSONResponse(content={
-            'success': True,
-            'message': 'Metadata saved successfully',
-            'project_id': project_id,
-            'backup_path': backup_path
-        })
+
+        # Preserve created timestamp if present, and set updated
+        now_ts = int(datetime.utcnow().timestamp())
+        try:
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    try:
+                        existing = json.load(f)
+                        if isinstance(existing, dict) and 'created' in existing:
+                            metadata['created'] = int(existing.get('created') or now_ts)
+                    except Exception:
+                        pass
+
+            metadata['updated'] = now_ts
+
+            # Atomic write
+            tmp_path = metadata_path + '.tmp'
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, metadata_path)
+
+            return JSONResponse(content={
+                'success': True,
+                'message': 'Metadata saved successfully',
+                'project_id': project_id,
+                'backup_path': backup_path,
+                'updated': now_ts
+            })
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save metadata: {str(e)}")
     
     except HTTPException:
         raise
@@ -256,12 +275,12 @@ async def delete_project(
         raise HTTPException(status_code=500, detail=f"Failed to delete project: {str(e)}")
 
 
-@router.post("/projects/{project_id}/generate")
+@router.get("/projects/{project_id}/generate")
 async def generate_pdf(
     project_id: str = Path(..., description="Project ID"),
-    quality: str = Body('medium', description="PDF quality: low, medium, high"),
-    paper_size: str = Body('a4_fit', description="Paper size: a4_fit, a4_ratio, original"),
-    filename: Optional[str] = Body(None, description="Custom filename (without extension)")
+    quality: str = 'medium',
+    paper_size: str = 'a4_fit',
+    filename: Optional[str] = None
 ):
     """
     Generate PDF with Server-Sent Events for progress tracking.
@@ -283,7 +302,7 @@ async def generate_pdf(
     import asyncio
     from ..agent.transform_service import apply_metadata_transforms
     from ..agent.pdf_generator import save_pdf_scan_document_fast, save_pdf_scan_document_mono_fast
-    from ..agent.layout_engine import layout_items_by_orientation
+    from ..agent.layout_engine import layout_documents_smart
     from reportlab.lib.pagesizes import A4
     
     async def generate():
@@ -358,8 +377,9 @@ async def generate_pdf(
             yield f"data: {json.dumps({'progress': 50, 'stage': 'render', 'message': 'Laying out pages...'})}\n\n"
             await asyncio.sleep(0.1)
             
-            # Layout items by orientation
-            pages = layout_items_by_orientation(transformed_items)
+            # Layout documents using the same smart layout as the main agent
+            # transformed_items is a list of tuples: (span, pos, img, dpi)
+            pages = layout_documents_smart(transformed_items, int(A4[0]), int(A4[1]), 10)
             
             yield f"data: {json.dumps({'progress': 60, 'stage': 'render', 'message': f'Rendering {len(pages)} pages...'})}\n\n"
             await asyncio.sleep(0.1)
@@ -406,7 +426,13 @@ async def generate_pdf(
             color_size = os.path.getsize(output_color) if os.path.exists(output_color) else 0
             mono_size = os.path.getsize(output_mono) if os.path.exists(output_mono) else 0
             
-            yield f"data: {json.dumps({'progress': 100, 'stage': 'complete', 'message': 'PDF generation complete!', 'files': [{'path': output_color, 'size': color_size, 'type': 'color'}, {'path': output_mono, 'size': mono_size, 'type': 'monochrome'}]})}\n\n"
+            files_out = []
+            if os.path.exists(output_color):
+                files_out.append({'path': output_color, 'size': color_size, 'type': 'color', 'url': f'/api/download/{os.path.basename(output_color)}'})
+            if os.path.exists(output_mono):
+                files_out.append({'path': output_mono, 'size': mono_size, 'type': 'monochrome', 'url': f'/api/download/{os.path.basename(output_mono)}'})
+
+            yield f"data: {json.dumps({'progress': 100, 'stage': 'complete', 'message': 'PDF generation complete!', 'files': files_out})}\n\n"
         
         except Exception as e:
             yield f"data: {json.dumps({'error': f'PDF generation failed: {str(e)}'})}\n\n"

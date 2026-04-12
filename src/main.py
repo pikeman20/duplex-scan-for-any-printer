@@ -15,11 +15,36 @@ from PIL import Image
 
 from agent.config import Config
 from agent.session_manager import SessionManager, Session
-from agent.image_processing import load_image, rotate_180, batch_correct_orientation, deskew_image, _unload_bg_removal_model
-from agent.pdf_generator import save_pdf_from_images_interleaved, save_pdf_card_2in1_grid
+from agent.image_processing import (
+    load_image,
+    rotate_180,
+    batch_correct_orientation,
+    deskew_image,
+    _unload_bg_removal_model,
+    crop_document_v2
+)
+from agent.pdf_generator import (
+    save_pdf_from_images_interleaved,
+    save_pdf_card_2in1_grid,
+    save_pdf_from_images_interleaved_fast,
+    save_pdf_from_images_interleaved_mono_fast,
+    save_pdf_scan_document_fast,
+    save_pdf_scan_document_mono_fast,
+    save_pdf_card_2in1_grid_fast,
+    save_pdf_card_2in1_grid_mono_fast
+)
 from agent.print_dispatcher import print_pdf_duplex, print_pdf_monochrome
 from agent.ftp_watcher import FTPWatcher
-from agent.layout_engine import determine_document_span, layout_documents_smart
+from agent.layout_engine import (
+    determine_document_span,
+    layout_documents_smart,
+    layout_items_by_orientation
+)
+from agent.metadata_generator import (
+    generate_scan_duplex_metadata,
+    generate_scan_document_metadata,
+    generate_card_2in1_metadata
+)
 from agent import logger
 from agent.error_handler import (safe_execute, retry_on_failure, handle_session_error,
                                  handle_image_processing_error, handle_pdf_generation_error,
@@ -42,7 +67,38 @@ def process_session(cfg: Config, s: Session):
         
         # Check disk space before processing (require 100MB free)
         check_disk_space(cfg.output_dir, required_mb=100)
-        
+        # Prepare project directory and move source images into project's own storage
+        try:
+            project_dir = os.path.join(cfg.output_dir, s.id)
+            images_dir = os.path.join(project_dir, 'images')
+            os.makedirs(images_dir, exist_ok=True)
+
+            moved_paths = []
+            import shutil
+            for idx, p in enumerate(s.images):
+                try:
+                    if not os.path.exists(p):
+                        logger.warning(f"Source image missing when preparing project: {p}")
+                        continue
+                    base = os.path.basename(p)
+                    # Ensure unique filename in project images folder
+                    target_name = base
+                    if os.path.exists(os.path.join(images_dir, target_name)):
+                        name, ext = os.path.splitext(base)
+                        target_name = f"{name}_{idx}{ext}"
+                    target_path = os.path.join(images_dir, target_name)
+                    shutil.move(p, target_path)
+                    moved_paths.append(target_path)
+                except Exception as e:
+                    logger.warning(f"Failed to move {p} to project folder: {e}")
+
+            # Replace session images list with moved paths (if any moved), otherwise keep originals
+            if moved_paths:
+                s.images = moved_paths
+
+        except Exception as e:
+            logger.warning(f"Failed to prepare project storage for session {s.id}: {e}")
+
         _process_session_inner(cfg, s, session_start)
         
     except Exception as e:
@@ -144,7 +200,7 @@ def _process_session_inner(cfg: Config, s: Session, session_start: float):
         logger.info(f"🖨️  Test Print Mode: Printing {len(ordered_items)} images directly")
         
         # Convert images to simple PDF
-        from agent.pdf_generator import save_pdf_from_images_simple
+        # save_pdf_from_images_simple is imported at module top
         
         test_pdf_path = out_path.replace('.pdf', '_test.pdf')
         
@@ -260,8 +316,7 @@ def _process_session_inner(cfg: Config, s: Session, session_start: float):
         pairs = list(zip([item.img for item in front_items], [item.img for item in back_items]))
         
         # Fast PDF generation with PyMuPDF (memory buffers)
-        from agent.pdf_generator import (save_pdf_from_images_interleaved_fast, 
-                                        save_pdf_from_images_interleaved_mono_fast)
+        # fast pdf generators imported at module top
         
         print("\n📊 PDF Generation Speed Test:")
         print("-" * 90)
@@ -281,6 +336,15 @@ def _process_session_inner(cfg: Config, s: Session, session_start: float):
         print("-" * 90)
         print(f"💡 Total PDF generation time:       {time_fast_color + time_fast_mono:.3f}s")
         print("-" * 90)
+
+        # Generate duplex metadata: each side is a page (ordered_items already contains ordered paths)
+        try:
+            # ordered_items is a list of ImageItem(path, img) NamedTuple; convert to tuples
+            ordered_pairs = [(it.path, it.img) for it in ordered_items]
+            # Pass rotation_info collected during processing so metadata reflects rotation/deskew
+            generate_scan_duplex_metadata(s.id, ordered_pairs, rotation_info, out_dir)
+        except Exception as e:
+            print(f"⚠️  Duplex metadata generation failed: {e}")
         
         # Confirm-and-print: only print if print_requested flag is True
         if s.print_requested and not getattr(cfg, "test_mode", False):
@@ -369,7 +433,7 @@ def _process_session_inner(cfg: Config, s: Session, session_start: float):
         processing_start = time.time()
         
         # Import the new background removal based cropping
-        from agent.image_processing import crop_document_v2
+        # crop_document_v2 imported at module top
         
         def crop_document(img: Image.Image) -> List[Tuple[Image.Image, Tuple[int, int, int, int]]]:
             """Document detection and crop using background removal (v2).
@@ -488,7 +552,6 @@ def _process_session_inner(cfg: Config, s: Session, session_start: float):
             print(f"[TIMING] Layout computation: {time.time() - layout_start:.3f}s")
 
             # Generate metadata for web UI editing
-            from agent.metadata_generator import generate_scan_document_metadata
             try:
                 generate_scan_document_metadata(s.id, doc_items, pages, out_dir)
             except Exception as e:
@@ -498,8 +561,7 @@ def _process_session_inner(cfg: Config, s: Session, session_start: float):
             out_path_mono = os.path.join(out_dir, f"{s.id}_mono.pdf")
             
             # Fast PDF generation with PyMuPDF
-            from agent.pdf_generator import (save_pdf_scan_document_fast,
-                                            save_pdf_scan_document_mono_fast)
+            # save_pdf_scan_document_* imported at module top
             
             print("\n📊 PDF Generation Speed Test:")
             print("-" * 90)
@@ -544,7 +606,7 @@ def _process_session_inner(cfg: Config, s: Session, session_start: float):
 
     elif mode == cfg.subdirs.get("card_2in1") or mode == "card_2in1":
         # Import the new background removal based cropping (same as scan_document)
-        from agent.image_processing import crop_document_v2
+        # crop_document_v2 imported at module top
         
         def crop_card(img: Image.Image, img_name: str) -> Tuple[Image.Image, float]:
             """Card detection using background removal (v2).
@@ -577,19 +639,17 @@ def _process_session_inner(cfg: Config, s: Session, session_start: float):
         print(f"[TIMING] Card detection & cropping: {time.time() - crop_start:.3f}s ({len(cropped)} cards)")
 
         # Generate metadata for web UI editing
-        from agent.metadata_generator import generate_card_2in1_metadata
         try:
             # Note: We don't have pages layout yet, will be computed inside PDF generator
             # For now, save basic metadata
-            from agent.layout_engine import layout_items_by_orientation
             pages_layout = layout_items_by_orientation(cropped)
-            generate_card_2in1_metadata(s.id, cropped, pages_layout, deskew_angles, out_dir)
+            # Pass original source filenames (which were moved into project images directory)
+            source_filenames = [os.path.basename(item.path) for item in ordered_items]
+            generate_card_2in1_metadata(s.id, cropped, pages_layout, deskew_angles, out_dir, source_filenames)
         except Exception as e:
             print(f"⚠️  Metadata generation failed: {e}")
 
-        # Fast PDF generation with PyMuPDF
-        from agent.pdf_generator import (save_pdf_card_2in1_grid_fast,
-                                        save_pdf_card_2in1_grid_mono_fast)
+        # Fast PDF generation with PyMuPDF (imported at module top)
         
         print("\n📊 PDF Generation Speed Test:")
         print("-" * 90)

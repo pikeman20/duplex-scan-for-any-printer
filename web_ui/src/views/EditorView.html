@@ -1,5 +1,5 @@
-<div class="editor-view">
-  <!-- Loading state -->
+<div class="editor-view-root">
+  <div class="editor-view">
   <div v-if="isLoading" class="loading-overlay">
     <div class="spinner"></div>
     <p>Loading project...</p>
@@ -26,7 +26,7 @@
           :class="{ active: selectedIndex === index }"
           @click="selectImage(index)"
         >
-          <img :src="getThumbnailUrl(image.filename)" :alt="`Image ${index + 1}`" />
+          <img loading="lazy" :src="getThumbnailUrl(image.filename)" :alt="`Image ${index + 1}`" />
           <span :class="['thumb-number', { dirty: image._dirty }]">{{ index + 1 }}</span>
         </div>
       </div>
@@ -49,17 +49,18 @@
     </main>
 
     <!-- Tools panel -->
-    <aside class="tools-panel">
+    <aside class="tools-panel" ref="toolsPanel">
       <div class="tool-section">
         <h4>✂️ Crop Tools</h4>
-        <button @click="addCropBox" class="btn-tool">Add Crop Box</button>
-        <button @click="clearCrops" class="btn-tool btn-danger">Clear All Crops</button>
+        <button @click="addCropBox" class="btn-tool" :disabled="hasCrop()" :title="hasCrop() ? 'Only one crop allowed' : 'Add a crop box'">Add Crop Box</button>
+        <button @click="clearCrops" class="btn-tool btn-danger" title="Remove crop">Clear Crop</button>
+        <button @click="cropFromMetadata" class="btn-tool">Crop from Metadata</button>
         <button @click="updatePreview" class="btn-tool">Update Preview</button>
         <div class="tool-hint">💡 Drag corners to resize<br>⌨️ Delete/Backspace to remove</div>
       </div>
       
       <!-- Crop Preview in Tools Panel -->
-      <div class="tool-section preview-section">
+      <div class="tool-section preview-section" ref="previewSection">
         <div class="preview-header-row">
           <h4>✂️ Crop Preview</h4>
           <button 
@@ -76,7 +77,10 @@
           </div>
         </div>
         <div v-if="previewUrl" class="preview-container">
-          <img :src="previewUrl" class="preview-image" alt="Crop Preview" />
+          <img ref="previewImg" loading="lazy" decoding="async" :src="previewUrl" class="preview-image" :aria-busy="isPreviewLoading" :class="{ 'loading': isPreviewLoading }" @load="onPreviewImgLoad" @error="onPreviewImgError" alt="Crop Preview" />
+          <div v-if="isPreviewLoading" class="preview-loading-overlay" aria-hidden="true">
+            <div class="preview-loading-spinner"></div>
+          </div>
           <div v-if="previewDimensions" class="preview-info">
             <span title="Original image dimensions">📐 {{ previewDimensions.width }} × {{ previewDimensions.height }}px</span>
             <span class="aspect-ratio">{{ previewDimensions.aspectRatio }}</span>
@@ -143,11 +147,16 @@
   <section v-if="pdfPages.length > 0" class="pdf-preview-section">
     <div class="preview-header" @click="showPdfPreview = !showPdfPreview">
       <h3>📄 PDF Pages Preview ({{ pdfPages.length }})</h3>
-      <span class="toggle-icon">{{ showPdfPreview ? '▼' : '▶' }}</span>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button @click.stop="openPdfPreviewPanel()" :disabled="isPdfPreviewLoading" class="btn-preview-small">
+          {{ isPdfPreviewLoading ? 'Generating…' : 'Preview PDF' }}
+        </button>
+        <span class="toggle-icon">{{ showPdfPreview ? '▼' : '▶' }}</span>
+      </div>
     </div>
     <div v-show="showPdfPreview" class="pdf-pages-grid">
       <div v-for="(page, idx) in pdfPages" :key="idx" class="pdf-page-item">
-        <img :src="page.url" :alt="`Page ${idx + 1}`" />
+        <img loading="lazy" :src="page.url" :alt="`Page ${idx + 1}`" />
         <span class="page-number">Page {{ idx + 1 }}</span>
       </div>
     </div>
@@ -247,5 +256,43 @@
         </div>
       </div>
     </div>
+  </div>
+<!-- Server Crop Modal -->
+  </div>
+
+  <!-- Server Crop Modal -->
+  <div v-if="showServerCropModal" class="modal-overlay" @click="closeServerCropModal">
+  <div class="modal-content server-crop-modal" @click.stop>
+    <div class="modal-header">
+      <h3>🔍 Server Crop Result</h3>
+      <button @click="closeServerCropModal" class="btn-close-modal" title="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div v-if="serverCropUrl" class="server-crop-image-container">
+        <img loading="lazy" :src="serverCropUrl" class="server-crop-image" alt="Server cropped image" />
+      </div>
+      <div v-if="serverCropDimensions" class="crop-info">
+        <div class="dimension-info">
+          <span title="Cropped image dimensions">📐 {{ serverCropDimensions.width }} × {{ serverCropDimensions.height }}px</span>
+          <span>📊 {{ serverCropDimensions.aspectRatio }}</span>
+        </div>
+      </div>
+      <div v-if="serverCropDebugInfo" class="debug-info">
+        <h4>🐛 Debug Information</h4>
+        <details>
+          <summary>Original Size</summary>
+          <pre>{{ JSON.stringify(serverCropDebugInfo.original_size, null, 2) }}</pre>
+        </details>
+        <details>
+          <summary>BBoxes ({{ serverCropDebugInfo.bbox_count }})</summary>
+          <pre>{{ JSON.stringify(serverCropDebugInfo.bboxes, null, 2) }}</pre>
+        </details>
+        <details>
+          <summary>Final Crop Size</summary>
+          <pre>{{ JSON.stringify(serverCropDebugInfo.final_crop_size, null, 2) }}</pre>
+        </details>
+      </div>
+    </div>
+  </div>
   </div>
 </div>

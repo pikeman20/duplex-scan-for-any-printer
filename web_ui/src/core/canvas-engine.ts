@@ -4,6 +4,7 @@
  */
 
 import Konva from 'konva'
+import { rootCertificates } from 'tls';
 
 export class CanvasEngine {
   stage: Konva.Stage;
@@ -22,6 +23,7 @@ export class CanvasEngine {
   isPanning: boolean;
   lastPosX: number;
   lastPosY: number;
+  private _transformReady: boolean;
 
   constructor(canvasElement: HTMLCanvasElement, options: Record<string, unknown> = {}) {
     const wrapper = canvasElement.parentElement
@@ -78,6 +80,7 @@ export class CanvasEngine {
     this.isPanning = false
     this.lastPosX = 0
     this.lastPosY = 0
+    this._transformReady = false
 
     this._setupEvents()
     this._setupZoomPan()
@@ -88,7 +91,14 @@ export class CanvasEngine {
       const imageObj = new Image()
       imageObj.crossOrigin = 'anonymous'
 
-      imageObj.onload = () => {
+      imageObj.onload = async () => {
+        // Reset transform ready state for new image
+        this._transformReady = false;
+        
+        // Yield one animation frame so the browser can paint any pending
+        // UI changes (spinner / placeholder) before running expensive
+        // synchronous Konva operations below.
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         this.imageLayer.destroyChildren()
 
         const crops = this.cropLayer.find?.('.cropBox') ?? []
@@ -140,6 +150,21 @@ export class CanvasEngine {
           rotation: 0
         })
 
+        // Ensure the image node is centered in the stage and has proper
+        // offset values so bbox coordinate mapping is consistent for both
+        // rotated and unrotated images. This mirrors the attributes set
+        // by applyRotation for non-zero rotations.
+        try {
+          const centerX = (imageObj.width * displayScale) / 2
+          const centerY = (imageObj.height * displayScale) / 2
+          this.currentImage.offsetX(imageObj.width / 2)
+          this.currentImage.offsetY(imageObj.height / 2)
+          this.currentImage.x(centerX)
+          this.currentImage.y(centerY)
+        } catch (e) {
+          // ignore if Konva methods unavailable
+        }
+
         // Ensure filters/defaults are neutral for each newly loaded image
         try {
           this.currentImage.filters([])
@@ -159,11 +184,21 @@ export class CanvasEngine {
 
         // Cache the image once so Konva filters can operate without
         // re-caching on every small adjustment (which is expensive).
+        // Defer caching to idle time so the initial paint isn't blocked.
         try {
-          this.currentImage.cache()
+          const scheduleIdle = (fn: () => void) => {
+            if (typeof (window as any).requestIdleCallback === 'function') {
+              (window as any).requestIdleCallback(() => fn(), { timeout: 500 })
+            } else {
+              // Fallback: small timeout to yield to browser paint
+              setTimeout(fn, 50)
+            }
+          }
+          scheduleIdle(() => {
+            try { this.currentImage?.cache() } catch (err) { console.warn('Image caching failed:', err) }
+          })
         } catch (err) {
-          // Fail silently if caching is unsupported in this environment
-          console.warn('Image caching failed:', err)
+          // Fail silently if scheduling is unavailable
         }
 
         // Debug: log current filters/values to help diagnose bright image issues
@@ -179,6 +214,17 @@ export class CanvasEngine {
         this.resetZoom()
 
         this._emit('imageLoaded', { width: canvasWidth, height: canvasHeight })
+        
+        // Set state to true BEFORE emitting event
+        // This ensures late subscribers can query the state
+        setTimeout(() => {
+          const ready = this.isTransformReady();
+          if (ready) {
+            this._transformReady = true;
+            this._emit('transformReady', { width: canvasWidth, height: canvasHeight })
+          }
+        }, 0)
+        
         resolve()
       }
 
@@ -217,9 +263,17 @@ export class CanvasEngine {
     const autoSelect = finalOptions.autoSelect
     delete finalOptions.autoSelect
 
+    // Ensure only one crop box exists: remove any existing ones
+    try {
+      const existing = this.cropLayer.find('.cropBox') || [];
+      existing.forEach((n: Konva.Node) => n.destroy());
+      // Clear transformer selection
+      this.transformer.nodes([]);
+    } catch (e) {}
+
     const rect = new Konva.Rect({
-      x: finalOptions.x ?? finalOptions.left ?? 50,
-      y: finalOptions.y ?? finalOptions.top ?? 50,
+      x: finalOptions.x,
+      y: finalOptions.y,
       width: finalOptions.width,
       height: finalOptions.height,
       fill: 'rgba(59, 130, 246, 0.15)',
@@ -238,7 +292,7 @@ export class CanvasEngine {
     })
 
     rect.on('dragend transformend', () => {
-      this._emit('modified')
+      this._emit('modified', { source: 'user' })
     })
 
     this.cropLayer.add(rect)
@@ -259,128 +313,155 @@ export class CanvasEngine {
     this._emit('objectAdded', { type: 'cropBox' })
     return rect
   }
-
-  getCropBoxes() {
-    const crops = this.cropLayer.find('.cropBox')
-    const displayScale = this.displayScale || 1
-    const stageInv = this.stage.getAbsoluteTransform().copy().invert()
-
-    const img = this.currentImage
-    if (!img) return []
-
-    const rad = (img.rotation() * Math.PI) / 180
-
-    if (!img) return []
-
-    const rotatedW_UI = (Math.abs(img.width() * Math.cos(rad)) + Math.abs(img.height() * Math.sin(rad))) * displayScale
-    const rotatedH_UI = (Math.abs(img.width() * Math.sin(rad)) + Math.abs(img.height() * Math.cos(rad))) * displayScale
-
-    const topLeftX = img.x() - rotatedW_UI / 2
-    const topLeftY = img.y() - rotatedH_UI / 2
-
-    return crops.map((rect: any) => {
-      const absTF = rect.getAbsoluteTransform()
-      const absTL = absTF.point({ x: 0, y: 0 })
-      const absTR = absTF.point({ x: rect.width() * rect.scaleX(), y: 0 })
-      const absBL = absTF.point({ x: 0, y: rect.height() * rect.scaleY() })
-
-      const tl = stageInv.point(absTL)
-      const tr = stageInv.point(absTR)
-      const bl = stageInv.point(absBL)
-
-      const w_display = Math.hypot(tr.x - tl.x, tr.y - tl.y)
-      const h_display = Math.hypot(bl.x - tl.x, bl.y - tl.y)
-
-      const x_display = tl.x
-      const y_display = tl.y
-
-      const x = (x_display - topLeftX) / displayScale
-      const y = (y_display - topLeftY) / displayScale
-      const w = w_display / displayScale
-      const h = h_display / displayScale
-
-      const result = { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }
-
-      return result
-    })
-  }
-
   getCropBoxesForOriginal() {
-    const crops = this.cropLayer.find('.cropBox')
-    if (crops.length === 0) return []
-
+    const boxesInfo = this.getCropBoxesInfoForOriginal();
+    //Rounding the bbox values
+    if (!boxesInfo || boxesInfo.length === 0) return [];
+    const info = boxesInfo[0];
+    return [{
+      x: Math.round(info.bbox.x),
+      y: Math.round(info.bbox.y),
+      w: Math.round(info.bbox.w),
+      h: Math.round(info.bbox.h)
+    }];
+  }
+  getCropBoxesInfoForOriginal() {
     const imgNode = this.currentImage
-    if (!imgNode) return []
+    if (!imgNode) return null
+    
+    // CRITICAL: Check transform readiness FIRST
+    // Return null (not []) to signal "engine not ready" vs "user has zero crops"
+    try {
+      if (typeof (this as any).isTransformReady === 'function') {
+        if (!(this as any).isTransformReady()) {
+          console.debug('getCropBoxesInfoForOriginal: transform not ready, returning null')
+          return null
+        }
+      } else {
+        // Fallback check
+        const el = this._getImageElement()
+        if (!el || el.width === 0) {
+          console.debug('getCropBoxesInfoForOriginal: image element not ready, returning null')
+          return null
+        }
+      }
+    } catch (e) {
+      console.debug('getCropBoxesInfoForOriginal: readiness check failed, returning null')
+      return null
+    }
+    
+    // Transform is ready. Now check actual crop boxes.
+    const crops = this.cropLayer.find('.cropBox')
+    // Empty array is a valid state: user intentionally has no crops
+    if (crops.length === 0) {
+      console.debug('getCropBoxesInfoForOriginal: transform ready, but no crop boxes exist (valid state)')
+      return []
+    }
+    // Debug: surface important state for diagnosis
+    try {
+      console.group('getCropBoxesInfoForOriginal debug')
+      console.log('crop boxes count:', crops.length)
+      console.log('imgNode present:', !!imgNode)
+      console.log('originalDimensions:', this.originalDimensions)
+      const combinedScaleDbg = this.combinedScale || this.displayScale * this.imageScale
+      console.log('combinedScale:', combinedScaleDbg, 'displayScale:', this.displayScale, 'imageScale:', this.imageScale)
+    } catch (e) {
+      // ignore
+    }
 
     const combinedScale = this.combinedScale || this.displayScale * this.imageScale
+    const displayScale = this.displayScale || 1
 
-    return crops.map((rect: any) => {
-      const x_display = rect.x()
-      const y_display = rect.y()
+    const rad = (imgNode.rotation() * Math.PI) / 180
+    const rotatedW_UI = (Math.abs(imgNode.width() * Math.cos(rad)) + Math.abs(imgNode.height() * Math.sin(rad))) * displayScale
+    const rotatedH_UI = (Math.abs(imgNode.width() * Math.sin(rad)) + Math.abs(imgNode.height() * Math.cos(rad))) * displayScale
+
+    const topLeftX = imgNode.x() - rotatedW_UI / 2
+    const topLeftY = imgNode.y() - rotatedH_UI / 2
+    try {
+      console.debug('getCropBoxesInfoForOriginal: imgNode attrs', { x: imgNode.x(), y: imgNode.y(), rotation: imgNode.rotation(), offsetX: imgNode.offsetX?.(), offsetY: imgNode.offsetY?.(), rotatedW_UI, rotatedH_UI, topLeftX, topLeftY })
+    } catch (e) {}
+
+    const cropData = crops.map((rect: any) => {
+      const localTL = rect.position()
+
+      const x_display = localTL.x
+      const y_display = localTL.y
+
+      // Preserve width/height calculation from original implementation
       const w_display = rect.width() * rect.scaleX()
       const h_display = rect.height() * rect.scaleY()
 
-      const result = {
-        x: Math.round(x_display / combinedScale),
-        y: Math.round(y_display / combinedScale),
-        w: Math.round(w_display / combinedScale),
-        h: Math.round(h_display / combinedScale)
+      const x = x_display / combinedScale
+      const y = y_display / combinedScale
+      const w = w_display / combinedScale
+      const h = h_display / combinedScale
+
+      const bbox = { x: x, y: y, w: w, h: h }
+      try {
+        console.log('crop debug:', { localTL, x_display, y_display, w_display, h_display, bbox })
+      } catch (e) {}
+      return {
+        bbox: bbox,
+        offsetX: -topLeftX / combinedScale,
+        offsetY: -topLeftY / combinedScale,
       }
-
-      console.groupEnd()
-
-      return result
     })
+    try { console.groupEnd() } catch (e) {}
+    return cropData;
+  }
+
+  isTransformReady(): boolean {
+    // Return stored state (persistent lifecycle state, not transient event)
+    // Validation logic below acts as safety check but state is authoritative
+    if (this._transformReady) return true;
+    
+    // Fallback validation for edge cases where state wasn't set yet
+    try {
+      if (!this.currentImage) return false
+      const imgEl = this._getImageElement()
+      if (!imgEl || !imgEl.width) return false
+      const w = typeof (this.currentImage as any).width === 'function' ? (this.currentImage as any).width() : (this.currentImage as any).width
+      const h = typeof (this.currentImage as any).height === 'function' ? (this.currentImage as any).height() : (this.currentImage as any).height
+      // Offsets may legitimately be zero for unrotated images; only require
+      // that the image element and dimensions are present to consider the
+      // transform ready.
+      return !!imgEl && !!w && !!h
+    } catch (e) {
+      return false
+    }
   }
 
   loadCropBoxes(boxes: Array<any>) {
-    boxes.forEach(box => {
+    // Only load the first box to enforce single-crop behavior
+    const toLoad = (boxes && boxes.length > 0) ? [boxes[0]] : [];
+    toLoad.forEach(box => {
       const scale = this.combinedScale || this.displayScale || 1
 
       console.group('📦 Loading Bbox')
       console.log('Original bbox (metadata):', box)
-      console.log('Image scale (original→loaded):', this.imageScale)
-      console.log('Display scale (loaded→canvas):', this.displayScale)
-      console.log('Combined scale:', scale)
-      console.log('Original dimensions:', this.originalDimensions)
-      const loadedImage = this.currentImage?.image()
-      const loadedW = (loadedImage as any)?.width ?? null
-      const loadedH = (loadedImage as any)?.height ?? null
-      console.log('Loaded image actual size:', loadedW, 'x', loadedH)
-      console.log('Stage size:', this.stage.width(), 'x', this.stage.height())
-      console.log('Expected canvas bbox if metadata is correct:', { x: box.x * scale, y: box.y * scale, w: box.w * scale, h: box.h * scale })
-      console.log('Bbox % of original image:', {
-        x_pct: (box.x / this.originalDimensions.width * 100).toFixed(1) + '%',
-        y_pct: (box.y / this.originalDimensions.height * 100).toFixed(1) + '%',
-        w_pct: (box.w / this.originalDimensions.width * 100).toFixed(1) + '%',
-        h_pct: (box.h / this.originalDimensions.height * 100).toFixed(1) + '%'
-      })
-
-      const img = this.currentImage
-      if (img) {
-        console.log('🖼️ Image position on stage:', {
-          x: img.x(),
-          y: img.y(),
-          width: img.width(),
-          height: img.height(),
-          scaleX: img.scaleX(),
-          scaleY: img.scaleY(),
-          offsetX: img.offsetX(),
-          offsetY: img.offsetY(),
-          rotation: img.rotation()
-        })
-      } else {
-        console.log('🖼️ No current image on stage')
-      }
-      console.log('📐 Stage position:', { x: this.stage.x(), y: this.stage.y(), width: this.stage.width(), height: this.stage.height() })
 
       const scaledBox = { x: box.x * scale, y: box.y * scale, width: box.w * scale, height: box.h * scale, autoSelect: false }
+      console.log('Scaled bbox (applied to UI):', scaledBox, 'scale:', scale)
 
-      console.log('Scaled bbox (canvas coords):', scaledBox)
       console.groupEnd()
 
+      // addCropBox will remove any existing boxes before adding
       this.addCropBox(scaledBox)
     })
+    // Ensure the cropLayer is rendered synchronously so callers that
+    // immediately query crop boxes (e.g. export readiness checks)
+    // will observe the new nodes. Batch-draw may be deferred, so
+    // force a draw and emit a modified event for listeners.
+    try {
+      this.cropLayer.draw()
+    } catch (e) {
+      // ignore draw errors
+    }
+    // This call originates from programmatic loading of saved bbox metadata.
+    // Consumers can inspect `data.source` to distinguish user edits from
+    // non-user-edit lifecycle operations.
+    this._emit('modified', { source: 'programmatic' })
   }
 
   zoomIn() {
@@ -440,7 +521,7 @@ export class CanvasEngine {
       selected.forEach((node: Konva.Node) => node.destroy())
       this.transformer.nodes([])
       this.cropLayer.batchDraw()
-      this._emit('objectDeleted')
+      this._emit('objectDeleted', { source: 'user' })
     }
   }
 
@@ -449,7 +530,7 @@ export class CanvasEngine {
     crops.forEach((crop: Konva.Node) => crop.destroy())
     this.transformer.nodes([])
     this.cropLayer.batchDraw()
-    this._emit('cleared')
+    this._emit('cleared', { source: 'programmatic' })
   }
 
   getScaleFactor() {
@@ -509,6 +590,11 @@ export class CanvasEngine {
 
     const canvas = this.imageLayer.toCanvas({ x: 0, y: 0, width: rotatedW, height: rotatedH, pixelRatio: 1 })
 
+    // Attach helpful metadata so callers can map original-image pixels
+    try {
+      ;(canvas as any)._meta = { srcW, srcH, rotatedW, rotatedH }
+    } catch (e) {}
+
     // Restore original attributes and stage transform
     this.currentImage.setAttrs(originalAttrs)
     this.stage.scale({ x: stageScale, y: stageScale })
@@ -518,33 +604,194 @@ export class CanvasEngine {
     return canvas
   }
 
-  async exportCropBoxFromOriginal(options: { format?: string; quality?: number } = {}) {
-    const { format = 'png', quality = 1 } = options
+  async getTransformedOriginalCanvas() {
+    if (!this.currentImage) return null
+    // originalDimensions holds the target "original" pixel size
+    const origW = Math.round(this.originalDimensions.width || 0)
+    const origH = Math.round(this.originalDimensions.height || 0)
+    if (!origW || !origH) return null
 
-    const originalCrops = this.getCropBoxes()
+    const originalAttrs = {
+      x: this.currentImage.x(),
+      y: this.currentImage.y(),
+      scaleX: this.currentImage.scaleX(),
+      scaleY: this.currentImage.scaleY(),
+      rotation: this.currentImage.rotation(),
+      offsetX: this.currentImage.offsetX(),
+      offsetY: this.currentImage.offsetY()
+    }
 
-    const originalCropsReal = this.getCropBoxesForOriginal()
-    console.info('Compare between original crops and real original crops:', originalCrops, originalCropsReal)
+    const rotation = this.currentImage ? this.currentImage.rotation() : 0
+    const rad = (rotation * Math.PI) / 180
 
+    const imgEl = this._getImageElement()
+    if (!imgEl) return null
+    const srcW = imgEl.width
+    const srcH = imgEl.height
+    if (!srcW || !srcH) return null
+
+    // scale factor to render the Konva image at the original pixel dimensions
+    const origScaleX = origW / srcW
+    const origScaleY = origH / srcH
+
+    const rotatedW = Math.round(Math.abs(origW * Math.cos(rad)) + Math.abs(origH * Math.sin(rad)))
+    const rotatedH = Math.round(Math.abs(origW * Math.sin(rad)) + Math.abs(origH * Math.cos(rad)))
+
+    // Preserve stage transform and temporarily reset it so exported canvas is independent
+    const stageScale = this.stage.scaleX()
+    const stagePos = this.stage.position()
+
+    this.stage.scale({ x: 1, y: 1 })
+    this.stage.position({ x: 0, y: 0 })
+
+    try {
+      console.debug('getTransformedOriginalCanvas: before setAttrs', { originalAttrs, srcW, srcH, origScaleX, origScaleY, rotatedW, rotatedH })
+    } catch (e) {}
+
+    // Set image attributes so Konva draws the node at the requested original pixel size
+    this.currentImage.setAttrs({
+      scaleX: origScaleX,
+      scaleY: origScaleY,
+      x: rotatedW / 2,
+      y: rotatedH / 2,
+      offsetX: srcW / 2,
+      offsetY: srcH / 2,
+      rotation
+    })
+
+    try {
+      console.debug('getTransformedOriginalCanvas: after setAttrs', { x: this.currentImage.x(), y: this.currentImage.y(), offsetX: this.currentImage.offsetX(), offsetY: this.currentImage.offsetY(), scaleX: this.currentImage.scaleX(), scaleY: this.currentImage.scaleY(), rotation: this.currentImage.rotation() })
+    } catch (e) {}
+
+    const canvas = this.imageLayer.toCanvas({ x: 0, y: 0, width: rotatedW, height: rotatedH, pixelRatio: 1 })
+
+    // Restore original attributes and stage transform
+    this.currentImage.setAttrs(originalAttrs)
+    this.stage.scale({ x: stageScale, y: stageScale })
+    this.stage.position(stagePos)
+    this.imageLayer.batchDraw()
+
+    return canvas
+  }
+
+  async exportCropBoxFromOriginal(options: { format?: string; quality?: number; previewMaxWidth?: number } = {}) {
+    const { format = 'png', quality = 1, previewMaxWidth } = options
+
+    // Yield one animation frame to allow the UI to render loading indicators
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    const originalCrops = this.getCropBoxesInfoForOriginal()
+    console.debug('exportCropBoxFromOriginal: originalCrops:', originalCrops)
+
+    // null = engine not ready, [] = no crops exist (both are valid reasons to skip)
+    if (originalCrops === null) {
+      console.warn('exportCropBoxFromOriginal: transform not ready yet')
+      return null
+    }
     
-    if (originalCrops.length === 0) return null
+    if (originalCrops.length === 0) {
+      console.warn('exportCropBoxFromOriginal: no crop boxes available (user has deleted all)')
+      return null
+    }
     const crop = originalCrops[0]
-
-    const fullCanvas = await this.getTransformedFullCanvas()
-    if (!fullCanvas) return null
-
-    const cropCanvas = document.createElement('canvas')
-    cropCanvas.width = crop.w
-    cropCanvas.height = crop.h
-    const ctx = cropCanvas.getContext('2d')
-    if (ctx) {
-      ctx.drawImage(fullCanvas, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h)
-    } else {
-      console.warn('Failed to get 2D context for crop canvas')
+    // Use a canvas rendered at the original image pixel dimensions with all transforms applied
+    const fullCanvas = await this.getTransformedOriginalCanvas()
+    if (!fullCanvas) {
+      console.warn('exportCropBoxFromOriginal: getTransformedOriginalCanvas returned null', { originalDimensions: this.originalDimensions })
       return null
     }
 
-    return cropCanvas.toDataURL(`image/${format}`, quality)
+    const cropCanvas = document.createElement('canvas')
+    let targetW = Math.round(crop.bbox.w)
+    let targetH = Math.round(crop.bbox.h)
+
+    // If caller requests a maximum preview width, scale down preserving aspect
+    if (previewMaxWidth && targetW > previewMaxWidth) {
+      const scale = previewMaxWidth / targetW
+      targetW = Math.round(targetW * scale)
+      targetH = Math.round(targetH * scale)
+    }
+
+    cropCanvas.width = targetW
+    cropCanvas.height = targetH
+    const ctx = cropCanvas.getContext('2d')
+    if (ctx) {
+        // Compute source coordinates in the transformed canvas coordinate space.
+        // Prefer metadata from the rendered canvas which encodes how the
+        // original image was centered/offset when rendering the rotated canvas.
+        // Prefer engine-derived offsets. The engine computes `offsetX/offsetY`
+        // in `getCropBoxesInfoForOriginal()` using the Konva node geometry.
+        // Relying on a stored canvas `_meta` has proven fragile and can yield
+        // incorrect base offsets; use the offsets returned with each crop.
+        let cropBoxX = crop.bbox.x + (crop.offsetX || 0)
+        let cropBoxY = crop.bbox.y + (crop.offsetY || 0)
+      let cropboxW = crop.bbox.w;
+      let cropboxH = crop.bbox.h;
+
+      try {
+        // Ensure we don't request pixels outside the source canvas
+        const srcW = (fullCanvas as HTMLCanvasElement).width;
+        const srcH = (fullCanvas as HTMLCanvasElement).height;
+
+        const srcLeft = Math.max(0, Math.floor(cropBoxX));
+        const srcTop = Math.max(0, Math.floor(cropBoxY));
+        const srcRight = Math.min(srcW, Math.ceil(cropBoxX + cropboxW));
+        const srcBottom = Math.min(srcH, Math.ceil(cropBoxY + cropboxH));
+
+        const clampedW = Math.max(0, srcRight - srcLeft);
+        const clampedH = Math.max(0, srcBottom - srcTop);
+
+          if (clampedW !== Math.round(cropboxW) || clampedH !== Math.round(cropboxH) || srcLeft !== Math.floor(cropBoxX) || srcTop !== Math.floor(cropBoxY)) {
+            console.warn('exportCropBoxFromOriginal: clamping crop rect to canvas bounds', { cropBoxX, cropBoxY, cropboxW, cropboxH, srcW, srcH, clampedW, clampedH, srcLeft, srcTop });
+          }
+
+          console.debug('exportCropBoxFromOriginal: final src rect', { srcLeft, srcTop, clampedW, clampedH, srcW, srcH })
+
+        // If clamped size <= 0, nothing to draw
+        if (clampedW <= 0 || clampedH <= 0) {
+          console.warn('exportCropBoxFromOriginal: clamped crop has non-positive area', { clampedW, clampedH });
+          return null
+        }
+
+        // Adjust target dimensions proportionally if clamped differs
+        const drawTargetW = Math.round((clampedW / cropboxW) * targetW) || 1;
+        const drawTargetH = Math.round((clampedH / cropboxH) * targetH) || 1;
+
+        console.debug('exportCropBoxFromOriginal: drawing image with params', { cropBoxX: srcLeft, cropBoxY: srcTop, cropboxW: clampedW, cropboxH: clampedH, targetW: drawTargetW, targetH: drawTargetH })
+
+        ctx.drawImage(fullCanvas as HTMLCanvasElement, srcLeft, srcTop, clampedW, clampedH, 0, 0, drawTargetW, drawTargetH)
+      } catch (err) {
+        console.error('exportCropBoxFromOriginal: drawImage failed', err)
+        return null
+      }
+    } else {
+      console.warn('exportCropBoxFromOriginal: Failed to get 2D context for crop canvas')
+      return null
+    }
+
+    // Prefer toBlob which is asynchronous and avoids creating a large
+    // base64 string in memory. Return the Blob to the caller so it can
+    // create an object URL or otherwise handle the binary data.
+    const blob: Blob | null = await new Promise(resolve => {
+      try {
+        cropCanvas.toBlob((b) => resolve(b), `image/${format}`, quality)
+      } catch (err) {
+        console.warn('toBlob failed, falling back to toDataURL', err)
+        const dataUrl = cropCanvas.toDataURL(`image/${format}`, quality)
+        // convert dataUrl to blob synchronously via fetch
+        fetch(dataUrl).then(r => r.blob()).then(b => resolve(b)).catch(() => resolve(null))
+      }
+    })
+
+    if (!blob) return null
+
+    const ret = {
+      blob: blob,
+      width: crop.bbox.w,
+      height: crop.bbox.h
+    }
+    try { console.debug('exportCropBoxFromOriginal: returning blob', { size: blob.size, width: ret.width, height: ret.height }) } catch (e) {}
+    return ret
   }
 
   getImageUrl() {
