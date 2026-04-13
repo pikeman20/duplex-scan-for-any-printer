@@ -337,12 +337,22 @@ def _process_session_inner(cfg: Config, s: Session, session_start: float):
         print(f"💡 Total PDF generation time:       {time_fast_color + time_fast_mono:.3f}s")
         print("-" * 90)
 
-        # Generate duplex metadata: each side is a page (ordered_items already contains ordered paths)
+        # Generate duplex metadata: interleave front/back items to match PDF page order.
+        # PDF pages are: [front[0], back[reversed_0], front[1], back[reversed_1], ...]
+        # rotation_info[i] corresponds to corrected_items[i] (sequential order).
+        # back_items[j] was originally corrected_items[half + (half-1-j)] before reversal.
         try:
-            # ordered_items is a list of ImageItem(path, img) NamedTuple; convert to tuples
-            ordered_pairs = [(it.path, it.img) for it in ordered_items]
-            # Pass rotation_info collected during processing so metadata reflects rotation/deskew
-            generate_scan_duplex_metadata(s.id, ordered_pairs, rotation_info, out_dir)
+            interleaved_items = []
+            interleaved_rotation = []
+            for i in range(half):
+                # Front side: corrected index = i
+                interleaved_items.append((front_items[i].path, front_items[i].img))
+                interleaved_rotation.append(rotation_info[i])
+                # Back side (already reversed): original index = half + (half-1-i)
+                back_orig_idx = half + (half - 1 - i)
+                interleaved_items.append((back_items[i].path, back_items[i].img))
+                interleaved_rotation.append(rotation_info[back_orig_idx])
+            generate_scan_duplex_metadata(s.id, interleaved_items, interleaved_rotation, out_dir)
         except Exception as e:
             print(f"⚠️  Duplex metadata generation failed: {e}")
         

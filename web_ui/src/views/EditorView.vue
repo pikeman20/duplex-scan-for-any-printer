@@ -285,7 +285,29 @@ async function loadProject(): Promise<void> {
   isLoading.value = true;
   try {
     const response = await axios.get(`/api/projects/${projectId.value}/metadata`);
-    images.value = (response.data.images || []).map((img: any, idx: number) => ({
+    const rawImages: any[] = response.data.images || [];
+
+    // Build ID→original map BEFORE sorting so __original is always attached to
+    // the correct image regardless of display order.
+    // CRITICAL FIX: Previously this code used the *sorted* index (`idx`) to access
+    // the *original unsorted* array (`rawImages[idx]`). After sorting, `idx` no
+    // longer corresponded to the correct image in `rawImages`, causing thumbnails
+    // and transformations to be applied to the wrong images. Using a Map keyed by
+    // image ID ensures the correct __original data is always attached regardless
+    // of display order.
+    const originalByIdMap = new Map<string, any>();
+    rawImages.forEach((img: any, idx: number) => {
+      const id = img.id || `img_${idx}`;
+      originalByIdMap.set(id, {
+        rotation: img.rotation || 0,
+        deskew_angle: img.deskew_angle || 0,
+        brightness: img.brightness || 1.0,
+        contrast: img.contrast || 1.0,
+        bbox: img.bbox ? (Array.isArray(img.bbox) ? img.bbox : [img.bbox]) : []
+      });
+    });
+
+    images.value = rawImages.map((img: any, idx: number) => ({
       id: img.id || `img_${idx}`,
       filename: img.filename || img.source_file,
       rotation: img.rotation || 0,
@@ -295,18 +317,19 @@ async function loadProject(): Promise<void> {
       bbox: img.bbox ? (Array.isArray(img.bbox) ? img.bbox : [img.bbox]) : [],
       order: img.order !== undefined ? img.order : idx,
       _dirty: false
-      } as ImageMeta)).sort((a, b) => (a.order || 0) - (b.order || 0)).map((m: ImageMeta, idx: number) => {
-        // Attach an immutable snapshot of original metadata so reset can restore it
-        const raw = response.data.images[idx] || {};
-        ;(m as any).__original = {
-          rotation: raw.rotation || 0,
-          deskew_angle: raw.deskew_angle || 0,
-          brightness: raw.brightness || 1.0,
-          contrast: raw.contrast || 1.0,
-          bbox: raw.bbox ? (Array.isArray(raw.bbox) ? raw.bbox : [raw.bbox]) : []
-        };
-        return m;
-      });
+    } as ImageMeta))
+    .sort((a, b) => (a.order || 0) - (b.order || 0))
+    .map((m: ImageMeta) => {
+      // Look up original by ID (not by sorted index) to avoid mismatch
+      ;(m as any).__original = originalByIdMap.get(m.id!) ?? {
+        rotation: 0,
+        deskew_angle: 0,
+        brightness: 1.0,
+        contrast: 1.0,
+        bbox: []
+      };
+      return m;
+    });
     
     // Set loading to false to show the UI
     isLoading.value = false;
