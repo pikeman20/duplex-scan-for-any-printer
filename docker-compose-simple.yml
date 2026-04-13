@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  scan-agent:
+    build: .
+    container_name: scan-agent
+    ports:
+      - "2121:2121"  # FTP server
+      - "8099:8099"  # Web UI
+    volumes:
+      - ./scan_inbox:/share/scan_inbox
+      - ./scan_out:/share/scan_out
+      - ./checkpoints:/app/checkpoints
+    environment:
+      - SCAN_INBOX_BASE=/share/scan_inbox
+      - SCAN_OUTPUT_DIR=/share/scan_out
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    networks:
+      - scan-net
+
+networks:
+  scan-net:
+    driver: bridge

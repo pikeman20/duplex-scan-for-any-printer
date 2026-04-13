@@ -132,6 +132,12 @@ ENV/
 env.bak/
 venv.bak/
 
+# Logs
+logs/
+
+# Logs
+logs/
+
 # Spyder project settings
 .spyderproject
 .spyproject

@@ -50,6 +50,54 @@ cp test.jpg /share/scan_inbox/test_print/
 
 ## Quick Start
 
+### Simple Start (Recommended)
+```bash
+# Start all services (scan agent + FTP server + web UI)
+python run.py
+
+# Windows: Double-click start.bat
+```
+
+The orchestrator automatically:
+- Creates default config and directories if missing
+- Starts scan agent, FTP server (port 2121), and web UI (port 8099)
+- Logs all output to `./logs/` directory
+- Handles graceful shutdown with Ctrl+C
+
+### Selective Services
+```bash
+# Start only the scan agent (no FTP or web UI)
+python run.py --no-ftp --no-web
+
+# Start agent + FTP only (no web UI)
+python run.py --no-web
+
+# Start agent + web UI only (no FTP)
+python run.py --no-ftp
+```
+
+### Setup Only
+```bash
+# Create config and directories without starting services
+python run.py --setup
+```
+
+### Docker Start
+```bash
+# Using the simplified Docker configuration
+docker-compose -f docker-compose-simple.yml up -d
+```
+
+### Install as System Service (Linux)
+```bash
+# Install and start as a systemd service
+python run.py --install-service
+```
+
+## Traditional Method (Advanced)
+
+For more control over configuration:
+
 1. Configure `config.yaml` paths for your Linux server (defaults assume `/scan_inbox` and `/scan_out`).
 1. Activate your Python venv (this project assumes `.venv`):
 
