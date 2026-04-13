@@ -108,6 +108,24 @@
   display: block;
 }
 
+.thumbnail-rotated-wrapper {
+  display: inline-block;
+  transition: transform 0.2s ease;
+}
+
+.thumbnail-item:hover .thumbnail-rotated-wrapper {
+  transform: scale(1.05);
+}
+
+.thumbnail-rotated-wrapper {
+  display: inline-block;
+  transition: transform 0.2s ease;
+}
+
+.thumbnail-item:hover .thumbnail-rotated-wrapper {
+  transform: scale(1.05);
+}
+
 .thumb-number {
   position: absolute;
   bottom: 4px;

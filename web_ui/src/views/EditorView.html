@@ -41,7 +41,9 @@
           :class="{ active: selectedIndex === index }"
           @click="selectImage(index)"
         >
-          <img loading="lazy" :src="getThumbnailUrl(image.filename)" :alt="`Image ${index + 1}`" />
+          <div class="thumbnail-rotated-wrapper">
+            <img loading="lazy" :src="getThumbnailUrl(image.filename)" :alt="`Image ${index + 1}`" :style="{ transform: `rotate(${(image.rotation || 0) + (image.deskew_angle || 0)}deg)` }" />
+          </div>
           <span :class="['thumb-number', { dirty: image._dirty }]">{{ index + 1 }}</span>
         </div>
       </div>
