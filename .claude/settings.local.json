@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(python run.py)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(dir plans:*)",
+      "Bash(git:*)",
+      "Bash(pytest:*)"
     ]
   }
 }

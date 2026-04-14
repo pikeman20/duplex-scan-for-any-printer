@@ -66,6 +66,14 @@ DEFAULT_MAX_WORKERS = 2
 
 app = FastAPI(title="Scan Editor API", version="1.0.0")
 
+# Global variable to hold telegram bot instance (set by main application)
+telegram_bot_instance = None
+
+def set_telegram_bot(bot):
+    """Set the telegram bot instance for API access."""
+    global telegram_bot_instance
+    telegram_bot_instance = bot
+
 # Ensure package imports like `agent.*` work when running under uvicorn from project root.
 # The `agent` package lives in the same `src/` directory as this file, so add that
 # directory to `sys.path` early.
@@ -146,6 +154,48 @@ def _calculateDPI(imWidth: int, imHeight: int) -> int:
 async def health_check():
     """Health check endpoint"""
     return {"status": "ok", "service": "scan-editor"}
+
+
+@app.get("/api/bot/status")
+async def bot_status():
+    """Get Telegram bot status."""
+    if telegram_bot_instance is None:
+        return JSONResponse(
+            content={
+                "enabled": False,
+                "connected": False,
+                "pending_sessions": 0,
+                "authorized_users": 0,
+                "message": "Bot not initialized"
+            }
+        )
+
+    # For now, return basic status - would need proper integration for real-time data
+    return JSONResponse(
+        content={
+            "enabled": telegram_bot_instance.config.enabled,
+            "connected": telegram_bot_instance._running if hasattr(telegram_bot_instance, '_running') else False,
+            "pending_sessions": 1 if hasattr(telegram_bot_instance, '_latest_session_info') and telegram_bot_instance._latest_session_info else 0,
+            "authorized_users": len(telegram_bot_instance._authorized_chats) if hasattr(telegram_bot_instance, '_authorized_chats') else 0,
+            "message": "Bot operational" if telegram_bot_instance._running else "Bot stopped"
+        }
+    )
+
+
+@app.get("/api/session/status")
+async def session_status():
+    """Get current session status (placeholder - would need integration with session manager)."""
+    # This would need to be integrated with the actual session manager
+    return JSONResponse(
+        content={
+            "current_session_id": None,
+            "state": "COLLECTING",
+            "mode": "unknown",
+            "image_count": 0,
+            "timeout_seconds": 300,
+            "message": "Session status not available via API yet"
+        }
+    )
 
 
 @app.get("/api/projects")

@@ -3,8 +3,7 @@ from __future__ import annotations
 import os
 import yaml
 from dataclasses import dataclass, field
-from typing import Dict
-from typing import Dict
+from typing import Dict, List
 
 
 @dataclass
@@ -21,6 +20,15 @@ class PrinterConfig:
 
 
 @dataclass
+class TelegramConfig:
+    enabled: bool = False
+    bot_token: str = ""
+    authorized_users: List[str] = field(default_factory=list)
+    confirm_timeout_seconds: int = 300  # 5 minutes
+    notify_on_session_ready: bool = True
+
+
+@dataclass
 class Config:
     inbox_base: str
     subdirs: Dict[str, str]
@@ -28,6 +36,7 @@ class Config:
     session_timeout_seconds: int = 120
     a4_page: A4Page = field(default_factory=A4Page)
     printer: PrinterConfig = field(default_factory=PrinterConfig)
+    telegram: TelegramConfig = field(default_factory=TelegramConfig)
     margin_pt: int = 10
     gutter_pt: int = 18
     delete_inbox_files_after_process: bool = True
@@ -39,6 +48,7 @@ class Config:
             raw = yaml.safe_load(f)
         a4 = raw.get("a4_page", {})
         printer_raw = raw.get("printer", {})
+        telegram_raw = raw.get("telegram")
         cfg = Config(
             inbox_base=raw.get("inbox_base", "/scan_inbox"),
             subdirs=raw.get(
@@ -65,6 +75,13 @@ class Config:
                 name=str(printer_raw.get("name", "")),
                 ip=str(printer_raw.get("ip", "")),
             ),
+            telegram=TelegramConfig(
+                enabled=bool(telegram_raw.get("enabled", False)) if telegram_raw else False,
+                bot_token=str(telegram_raw.get("bot_token", "")) if telegram_raw else "",
+                authorized_users=list(telegram_raw.get("authorized_users", [])) if telegram_raw else [],
+                confirm_timeout_seconds=int(telegram_raw.get("confirm_timeout_seconds", 300)) if telegram_raw else 300,
+                notify_on_session_ready=bool(telegram_raw.get("notify_on_session_ready", True)) if telegram_raw else True,
+            ),
             margin_pt=int(raw.get("margin_pt", 10)),
             gutter_pt=int(raw.get("gutter_pt", 18)),
             delete_inbox_files_after_process=bool(
@@ -75,6 +92,8 @@ class Config:
         # Allow env overrides for base folders
         cfg.inbox_base = os.getenv("SCAN_INBOX_BASE", cfg.inbox_base)
         cfg.output_dir = os.getenv("SCAN_OUTPUT_DIR", cfg.output_dir)
+        # Override bot token from environment if available
+        cfg.telegram.bot_token = os.getenv("SCAN_TELEGRAM_BOT_TOKEN", cfg.telegram.bot_token)
         return cfg
 
     def path_for(self, key: str) -> str:

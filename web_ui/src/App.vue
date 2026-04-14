@@ -16,6 +16,17 @@
           
           <nav class="flex space-x-4">
             <button
+              @click="currentView = 'dashboard'"
+              :class="[
+                'px-4 py-2 rounded-lg font-medium transition-colors',
+                currentView === 'dashboard'
+                  ? 'bg-primary-600 text-white'
+                  : 'text-gray-600 hover:bg-gray-100'
+              ]"
+            >
+              📊 Dashboard
+            </button>
+            <button
               @click="currentView = 'projects'"
               :class="[
                 'px-4 py-2 rounded-lg font-medium transition-colors',
@@ -46,7 +57,8 @@
     <!-- Main Content -->
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
       <transition name="fade" mode="out-in">
-        <ProjectList v-if="currentView === 'projects'" @open-project="openProject" />
+        <Dashboard v-if="currentView === 'dashboard'" />
+        <ProjectList v-else-if="currentView === 'projects'" @open-project="openProject" />
         <GalleryView v-else-if="currentView === 'gallery'" @open-editor="openEditor" />
         <EditorView v-else-if="currentView === 'editor'" @back="currentView = 'projects'" />
       </transition>
@@ -60,11 +72,12 @@ import { useEditorStore } from '@/stores/editor'
 import ProjectList from '@/views/ProjectList.vue'
 import GalleryView from '@/views/GalleryView.vue'
 import EditorView from '@/views/EditorView.vue'
+import Dashboard from '@/views/Dashboard.vue'
 
 type Project = { filename: string }
 
 const editorStore = useEditorStore()
-const currentView = ref('projects') // Start with projects
+const currentView = ref('dashboard') // Start with dashboard
 
 const openProject = async (project: Project) => {
   await editorStore.loadScan(project.filename)

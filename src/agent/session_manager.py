@@ -4,7 +4,7 @@ import os
 import time
 import threading
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Callable
+from typing import List, Dict, Optional, Callable, Any, Any
 
 
 STATE_COLLECTING = "COLLECTING"
@@ -26,10 +26,17 @@ class Session:
 
 
 class SessionManager:
-    def __init__(self, timeout_seconds: int, on_confirm: Callable[[Session], None], on_reject: Callable[[Session], None]):
+    def __init__(
+        self,
+        timeout_seconds: int,
+        on_confirm: Callable[[Session], None],
+        on_reject: Callable[[Session], None],
+        on_state_change: Optional[Callable[[Session, str, str], None]] = None
+    ):
         self.timeout_seconds = timeout_seconds
         self.on_confirm_cb = on_confirm
         self.on_reject_cb = on_reject
+        self.on_state_change_cb = on_state_change
         self._by_mode: Dict[str, Session] = {}
         self._suspended_by_mode: Dict[str, Session] = {}
         self._lock = threading.Lock()
@@ -48,6 +55,8 @@ class SessionManager:
                                 s.state = STATE_REJECTED
                                 self._cleanup_session_files(s)
                                 self.on_reject_cb(s)
+                                if self.on_state_change_cb:
+                                    self.on_state_change_cb(s, STATE_WAIT_CONFIRM, STATE_REJECTED)
                                 del self._by_mode[mode]
                     # Suspended sessions
                     for mode, s in list(self._suspended_by_mode.items()):
@@ -87,12 +96,16 @@ class SessionManager:
         with self._lock:
             s = self._by_mode.get(mode)
             if s and s.state == STATE_COLLECTING:
+                old_state = s.state
                 s.state = STATE_WAIT_CONFIRM
+                if self.on_state_change_cb:
+                    self.on_state_change_cb(s, old_state, STATE_WAIT_CONFIRM)
 
     def confirm_latest(self, print_requested: bool = False):
         with self._lock:
             s = self._latest_active_session()
             if s:
+                old_state = s.state
                 s.state = STATE_CONFIRMED
                 s.print_requested = print_requested
                 # copy ref; processing may be long
@@ -105,15 +118,20 @@ class SessionManager:
                     except Exception:
                         pass
                     del self._suspended_by_mode[mode]
+                if self.on_state_change_cb:
+                    self.on_state_change_cb(s, old_state, STATE_CONFIRMED)
 
     def reject_latest(self):
         with self._lock:
             s = self._latest_active_session()
             if s:
+                old_state = s.state
                 s.state = STATE_REJECTED
                 self._cleanup_session_files(s)
                 self.on_reject_cb(s)
                 del self._by_mode[s.mode]
+                if self.on_state_change_cb:
+                    self.on_state_change_cb(s, old_state, STATE_REJECTED)
 
     def _latest_active_session(self) -> Optional[Session]:
         latest: Optional[Session] = None

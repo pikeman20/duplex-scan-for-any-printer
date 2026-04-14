@@ -52,6 +52,7 @@ from agent.error_handler import (safe_execute, retry_on_failure, handle_session_
                                  ImageProcessingError, PDFGenerationError, PrinterError)
 from agent.config_validator import validate_config
 from agent.resource_monitor import ResourceMonitor, schedule_periodic_cleanup
+from agent.telegram_bot import TelegramBot
 
 def process_session(cfg: Config, s: Session):
     """Process a confirmed session with error handling."""
@@ -741,7 +742,17 @@ def _process_session_inner(cfg: Config, s: Session, session_start: float):
 class ScanAgent:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.sessions = SessionManager(cfg.session_timeout_seconds, on_confirm=lambda s: process_session(cfg, s), on_reject=lambda s: None)
+
+        # Initialize Telegram bot if enabled
+        self.telegram_bot = TelegramBot.from_config(cfg)
+
+        # Session manager with callbacks for processing and bot notifications
+        self.sessions = SessionManager(
+            cfg.session_timeout_seconds,
+            on_confirm=lambda s: process_session(cfg, s),
+            on_reject=lambda s: None,
+            on_state_change=self._on_session_state_change if self.telegram_bot else None
+        )
         self.watcher = FTPWatcher(cfg.inbox_base, cfg.subdirs, self._on_new_file)
         
         # Async processing with priority queues
@@ -751,6 +762,74 @@ class ScanAgent:
         self.event_counter = 0  # For stable sorting
         self.worker_thread = threading.Thread(target=self._process_events, daemon=True)
         self.running = False
+
+        # Telegram bot integration
+        if self.telegram_bot:
+            self.telegram_bot.set_session_callback(self._handle_telegram_command)
+
+    def _on_session_state_change(self, session: Session, old_state: str, new_state: str) -> None:
+        """Handle session state changes for Telegram bot notifications."""
+        if not self.telegram_bot or not self.cfg.telegram.notify_on_session_ready:
+            return
+
+        # Notify when session enters WAIT_CONFIRM state
+        if new_state == "WAIT_CONFIRM":
+            session_info = {
+                "id": session.id,
+                "mode": session.mode,
+                "state": new_state,
+                "image_count": len(session.images),
+            }
+            self.telegram_bot.update_session_info(session_info)
+            logger.info(f"Session {session.id} ready for confirmation (mode: {session.mode})")
+
+    def _handle_telegram_command(self, confirm: bool, print_requested: bool) -> None:
+        """Handle commands from Telegram bot."""
+        session_to_process = None
+        is_confirm = confirm
+        request_print = print_requested
+
+        # Find session to process (outside of lock for callback)
+        with self.sessions._lock:
+            latest_session = None
+            for mode, s in self.sessions._by_mode.items():
+                if s.state == "WAIT_CONFIRM":
+                    if latest_session is None or s.last_activity > latest_session.last_activity:
+                        latest_session = s
+
+            if latest_session:
+                # Update session state while holding lock
+                if confirm:
+                    latest_session.state = "CONFIRMED"
+                    latest_session.print_requested = print_requested
+                else:
+                    latest_session.state = "REJECTED"
+
+                # Mark session for processing and clean up tracking
+                session_to_process = latest_session
+                # Clean up tracking references (but keep session object for callback)
+                del self.sessions._by_mode[latest_session.mode]
+                for mode, sus in list(self.sessions._suspended_by_mode.items()):
+                    try:
+                        self.sessions._cleanup_session_files(sus)
+                    except Exception:
+                        pass
+                    del self.sessions._suspended_by_mode[mode]
+
+        # Process session outside of lock to avoid blocking
+        if session_to_process:
+            if confirm:
+                logger.info(f"Telegram confirmed session {session_to_process.id}")
+                self.sessions.on_confirm_cb(session_to_process)
+            else:
+                logger.info(f"Telegram rejected session {session_to_process.id}")
+                self.sessions.on_reject_cb(session_to_process)
+        else:
+            if confirm:
+                logger.warning("Telegram confirm command received but no session in WAIT_CONFIRM state")
+            else:
+                logger.warning("Telegram reject command received but no session in WAIT_CONFIRM state")
+
 
     def _on_new_file(self, mode_folder_name: str, path: str):
         """Queue event for async processing (non-blocking)"""
@@ -824,12 +903,27 @@ class ScanAgent:
         self.running = True
         self.worker_thread.start()
         self.watcher.start()
+
+        # Start Telegram bot if enabled
+        if self.telegram_bot:
+            self.telegram_bot.start_polling()
+            # Set bot instance for web UI API
+            from web_ui_server import set_telegram_bot
+            set_telegram_bot(self.telegram_bot)
+            logger.info("Telegram bot started")
+
         print("[ScanAgent] Started (async mode)")
 
     def stop(self):
         print("[ScanAgent] Stopping...")
         self.running = False
         self.watcher.stop()
+
+        # Stop Telegram bot if enabled
+        if self.telegram_bot:
+            self.telegram_bot.stop()
+            logger.info("Telegram bot stopped")
+
         self.worker_thread.join(timeout=5)
         print("[ScanAgent] Stopped")
 
