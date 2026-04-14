@@ -201,6 +201,9 @@ async def bot_info():
             return JSONResponse(resp.json())
     except Exception:
         return JSONResponse({"registered_chats": {}, "notify_chat_ids": []})
+
+
+@app.get("/api/session/status")
 async def session_status():
     """Get current session status from the scan agent."""
     try:
@@ -262,6 +265,56 @@ async def session_reject_proxy():
             return JSONResponse(resp.json(), status_code=resp.status_code)
     except Exception as e:
         return JSONResponse({"ok": False, "message": str(e)}, status_code=503)
+
+
+@app.get("/api/activity")
+async def list_activity():
+    """Lightweight list of recent processed scan sessions (no thumbnail generation)."""
+    if not os.path.exists(SCAN_OUT_DIR):
+        return {"items": []}
+
+    items = []
+    for filename in sorted(os.listdir(SCAN_OUT_DIR), reverse=True):
+        # Only color PDFs (skip _mono.pdf)
+        if not filename.endswith(".pdf") or filename.endswith("_mono.pdf"):
+            continue
+        filepath = os.path.join(SCAN_OUT_DIR, filename)
+        if not os.path.isfile(filepath):
+            continue
+        stat = os.stat(filepath)
+        base_name = os.path.splitext(filename)[0]
+
+        # Try to load lightweight metadata from companion JSON
+        md_path = os.path.join(SCAN_OUT_DIR, f"{base_name}.json")
+        pages = None
+        md_created = None
+        if os.path.exists(md_path):
+            try:
+                with open(md_path, "r", encoding="utf-8") as f:
+                    md = json.load(f)
+                    pages = md.get("pages") or md.get("page_count")
+                    md_created = md.get("created")
+            except Exception:
+                pass
+
+        mode = "unknown"
+        if "scan_document" in filename:
+            mode = "scan_document"
+        elif "card" in filename or "2in1" in filename:
+            mode = "card_2in1"
+        elif "duplex" in filename or "copy" in filename:
+            mode = "scan_duplex"
+
+        items.append({
+            "id": base_name,
+            "filename": filename,
+            "mode": mode,
+            "pages": pages,
+            "size_mb": round(stat.st_size / 1024 / 1024, 2),
+            "created": int(md_created) if md_created else int(stat.st_ctime),
+        })
+
+    return {"items": items[:20]}  # cap at 20 most recent
 
 
 @app.get("/api/projects")

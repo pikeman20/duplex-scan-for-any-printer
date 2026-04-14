@@ -24,9 +24,19 @@ export interface SessionStatus {
   message: string
 }
 
+export interface ActivityItem {
+  id: string
+  filename: string
+  mode: string
+  pages: number | null
+  size_mb: number
+  created: number
+}
+
 export const useScansStore = defineStore('scans', {
   state: () => ({
     scans: [] as Array<any>,
+    activity: [] as ActivityItem[],
     isLoading: false,
     error: null as string | null,
     botStatus: null as BotStatus | null,
@@ -47,11 +57,12 @@ export const useScansStore = defineStore('scans', {
       this.isLoading = true
       this.error = null
       try {
-        const response = await axios.get('/api/scans')
-        this.scans = response.data.scans
+        const response = await axios.get('/api/activity')
+        this.activity = response.data.items ?? []
+        this.scans = this.activity  // keep compat
       } catch (error: any) {
         this.error = error.message
-        console.error('Failed to fetch scans:', error)
+        console.error('Failed to fetch activity:', error)
       } finally {
         this.isLoading = false
       }

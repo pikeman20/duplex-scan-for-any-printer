@@ -349,6 +349,38 @@
   .wide { grid-column: span 1; }
 }
 
+/* activity table */
+.activity-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.activity-table th {
+  text-align: left;
+  padding: 7px 10px;
+  background: #f9fafb;
+  color: #6b7280;
+  font-weight: 500;
+  border-bottom: 1px solid #e5e7eb;
+}
+.activity-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f3f4f6;
+  color: #374151;
+}
+.activity-table tr:last-child td { border-bottom: none; }
+.truncate {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hint {
+  color: #9ca3af;
+  font-size: 0.88rem;
+  padding: 8px 0;
+}
+
 
 .dashboard-header {
   margin-bottom: 30px;

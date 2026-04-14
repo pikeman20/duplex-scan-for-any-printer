@@ -39,6 +39,8 @@ class TelegramBot(NotificationChannel):
     _session_callback: Optional[Any] = field(default=None, repr=False)
     _latest_session_info: Optional[Dict] = field(default=None, repr=False)
     _confirmer_chat_id: Optional[int] = field(default=None, repr=False)  # who confirmed — gets the PDF
+    # Track message_ids sent per chat so we can edit them (remove buttons) when session resolves.
+    _notification_messages: Dict[int, int] = field(default_factory=dict, repr=False)  # chat_id -> message_id
 
     @property
     def name(self) -> str:
@@ -96,6 +98,7 @@ class TelegramBot(NotificationChannel):
             )
         self._latest_session_info = None
         self._confirmer_chat_id = None
+        self._notification_messages.clear()
 
     async def _send_pdf(self, chat_id: int, pdf_path: str, session_id: str) -> None:
         """Send the finished PDF as a document to a specific chat."""
@@ -114,6 +117,22 @@ class TelegramBot(NotificationChannel):
                 )
         except Exception as e:
             logger.error(f"Failed to send PDF to chat {chat_id}: {e}")
+
+    async def _edit_all_notifications(self, new_text: str) -> None:
+        """Edit all tracked session-notification messages: update text and remove buttons."""
+        _empty_kb = InlineKeyboardMarkup([])
+        for chat_id, message_id in list(self._notification_messages.items()):
+            try:
+                await self._application.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=new_text,
+                    parse_mode="HTML",
+                    reply_markup=_empty_kb,
+                )
+            except Exception as e:
+                logger.debug(f"Could not edit notification in chat {chat_id}: {e}")
+        self._notification_messages.clear()
 
     def start(self) -> None:
         """Implement NotificationChannel.start() by starting polling."""
@@ -249,10 +268,17 @@ class TelegramBot(NotificationChannel):
         await update.message.reply_text(status_text, parse_mode="HTML", reply_markup=reply_markup)
 
     async def _reply(self, update: Update, text: str) -> None:
-        """Reply to either a message or a callback_query edit."""
+        """Reply to either a message or a callback_query edit.
+
+        When editing a callback-query message we always pass an empty InlineKeyboardMarkup
+        so Telegram actually removes the buttons (omitting reply_markup keeps them).
+        """
+        _empty_kb = InlineKeyboardMarkup([])
         if update.callback_query:
             try:
-                await update.callback_query.edit_message_text(text, parse_mode="HTML")
+                await update.callback_query.edit_message_text(
+                    text, parse_mode="HTML", reply_markup=_empty_kb
+                )
             except Exception:
                 await update.callback_query.message.reply_text(text, parse_mode="HTML")
         elif update.message:
@@ -271,7 +297,7 @@ class TelegramBot(NotificationChannel):
             await self._reply(update, "⚠️ Bot not connected to session manager.")
             return
 
-        # Immediately acknowledge — user knows the tap/click was received
+        # Immediately acknowledge the requester — user knows the tap/click was received
         label = "Confirm + Print" if print_requested else "Confirm"
         await self._reply(
             update,
@@ -280,6 +306,16 @@ class TelegramBot(NotificationChannel):
 
         # Remember who confirmed so we can send them the finished PDF
         self._confirmer_chat_id = update.effective_chat.id if update.effective_chat else user.id
+
+        # Edit the session-ready notification in ALL chats to remove buttons.
+        # _reply above already edited the tapped message; editing it again with the
+        # same text + empty keyboard is harmless and ensures other chats are cleaned up.
+        confirmer_name = user.first_name or str(user.id)
+        self._schedule(
+            self._edit_all_notifications(
+                f"⏳ <b>{label}</b> — processing…\n<i>Confirmed by {confirmer_name}</i>"
+            )
+        )
 
         try:
             self._session_callback(confirm=True, print_requested=print_requested)
@@ -305,6 +341,13 @@ class TelegramBot(NotificationChannel):
             await self._reply(update, "⚠️ Bot not connected to session manager.")
             return
         await self._reply(update, "\u23f3 Reject received \u2014 cleaning up\u2026")
+        # Edit session-ready notifications in ALL chats to remove buttons
+        rejecter_name = user.first_name or str(user.id)
+        self._schedule(
+            self._edit_all_notifications(
+                f"\u274c <b>Session rejected</b> by {rejecter_name}"
+            )
+        )
         try:
             self._session_callback(confirm=False, print_requested=False)
             self._latest_session_info = None
@@ -467,12 +510,14 @@ class TelegramBot(NotificationChannel):
         async def _send_to_all() -> None:
             for chat_id in chat_ids:
                 try:
-                    await self._application.bot.send_message(
+                    msg = await self._application.bot.send_message(
                         chat_id=chat_id,
                         text=message,
                         parse_mode=parse_mode,
                         reply_markup=reply_markup,
                     )
+                    # Track message_id so we can edit/clear it later
+                    self._notification_messages[chat_id] = msg.message_id
                 except Exception as e:
                     err = str(e)
                     if "Forbidden" in err or "bot can't initiate" in err:

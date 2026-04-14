@@ -5,7 +5,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useScansStore } from '@/stores/scans'
 
-const STATUS_REFRESH_INTERVAL = 10_000
+const STATUS_REFRESH_INTERVAL = 3_000
 
 const scansStore = useScansStore()
 const statusTimer = ref<ReturnType<typeof setInterval> | null>(null)
@@ -104,6 +104,7 @@ const sessionStatusText = computed(() => {
 function refreshAll() {
   scansStore.fetchBotStatus()
   scansStore.fetchSessionStatus()
+  scansStore.fetchScans()
 }
 
 onMounted(() => {

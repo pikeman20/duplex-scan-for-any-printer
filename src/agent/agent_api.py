@@ -11,6 +11,7 @@ Binding to 127.0.0.1 prevents external access — only localhost services
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 from typing import Optional, Any, Callable
@@ -85,24 +86,33 @@ async def session_current():
 
 @app.post("/api/session/confirm")
 async def session_confirm(print_requested: bool = False):
-    """Confirm the current WAIT_CONFIRM session."""
+    """Confirm the current WAIT_CONFIRM session.
+
+    Fires the callback in a thread pool so the endpoint returns immediately
+    without blocking while image processing runs.
+    """
     if _session_command_cb is None:
         return JSONResponse({"ok": False, "message": "no command handler"}, status_code=503)
     try:
-        _session_command_cb(confirm=True, print_requested=print_requested)
-        return JSONResponse({"ok": True})
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, lambda: _session_command_cb(confirm=True, print_requested=print_requested))
+        return JSONResponse({"ok": True, "message": "confirm accepted"})
     except Exception as e:
         return JSONResponse({"ok": False, "message": str(e)}, status_code=500)
 
 
 @app.post("/api/session/reject")
 async def session_reject():
-    """Reject the current WAIT_CONFIRM session."""
+    """Reject the current WAIT_CONFIRM session.
+
+    Fires the callback in a thread pool so the endpoint returns immediately.
+    """
     if _session_command_cb is None:
         return JSONResponse({"ok": False, "message": "no command handler"}, status_code=503)
     try:
-        _session_command_cb(confirm=False, print_requested=False)
-        return JSONResponse({"ok": True})
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, lambda: _session_command_cb(confirm=False, print_requested=False))
+        return JSONResponse({"ok": True, "message": "reject accepted"})
     except Exception as e:
         return JSONResponse({"ok": False, "message": str(e)}, status_code=500)
 
