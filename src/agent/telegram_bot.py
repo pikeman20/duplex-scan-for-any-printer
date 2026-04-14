@@ -158,10 +158,14 @@ class TelegramBot(NotificationChannel):
         """NotificationChannel hook: edit tracked messages when action came from an external
         source (e.g. Web UI).  When Telegram itself triggered the action, _do_confirm /
         reject_command already snapshot+cleared _notification_messages synchronously, so
-        this dict is empty and the method is a safe no-op.
+        this dict is empty and the edit part becomes a safe no-op.
+        Always clears session state so /status reflects the resolved session.
         """
         messages_snapshot = dict(self._notification_messages)
         self._notification_messages.clear()
+        # Clear session state regardless of source so /status returns "no active session"
+        self._latest_session_info = None
+        self._confirmer_chat_id = None
         if not messages_snapshot:
             return
         label = "Confirmed" if confirmed else "Rejected"
