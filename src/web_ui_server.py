@@ -1347,6 +1347,53 @@ async def delete_scan(filename: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str):
+    """Delete a project completely: color PDF, mono PDF, JSON metadata, and images subfolder."""
+    import shutil
+    import re
+
+    # Reject path traversal attempts
+    if not re.match(r'^[\w\-]+$', project_id):
+        raise HTTPException(status_code=400, detail="Invalid project_id")
+
+    deleted = []
+    errors = []
+
+    # Files associated with the project
+    candidates = [
+        os.path.join(SCAN_OUT_DIR, f"{project_id}.pdf"),
+        os.path.join(SCAN_OUT_DIR, f"{project_id}_mono.pdf"),
+        os.path.join(SCAN_OUT_DIR, f"{project_id}_color.pdf"),
+        os.path.join(SCAN_OUT_DIR, f"{project_id}_edited.pdf"),
+        os.path.join(SCAN_OUT_DIR, f"{project_id}.json"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                deleted.append(os.path.basename(path))
+            except Exception as e:
+                errors.append(f"{os.path.basename(path)}: {e}")
+
+    # Project subfolder (images, thumbnails, etc.)
+    project_dir = os.path.join(SCAN_OUT_DIR, project_id)
+    if os.path.isdir(project_dir):
+        try:
+            shutil.rmtree(project_dir)
+            deleted.append(f"{project_id}/")
+        except Exception as e:
+            errors.append(f"{project_id}/: {e}")
+
+    if not deleted and not errors:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if errors:
+        raise HTTPException(status_code=500, detail="; ".join(errors))
+
+    return {"status": "deleted", "project_id": project_id, "deleted": deleted}
+
+
 @app.get("/api/projects/{project_id}/generate")
 async def generate_pdf_with_progress(
     project_id: str,

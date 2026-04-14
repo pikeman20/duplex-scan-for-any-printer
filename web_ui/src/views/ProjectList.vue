@@ -68,12 +68,23 @@
             </div>
 
             <!-- Actions -->
-            <button
-              class="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
-              @click.stop="openProject(project)"
-            >
-              ✏️ Edit Project
-            </button>
+            <div class="flex gap-2 mt-1">
+              <button
+                class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
+                @click.stop="openProject(project)"
+              >
+                ✏️ Edit
+              </button>
+              <button
+                class="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-600 hover:text-white transition font-medium"
+                :disabled="deletingId === project.id"
+                @click.stop="deleteProject(project)"
+                title="Delete project permanently"
+              >
+                <span v-if="deletingId === project.id">⏳</span>
+                <span v-else>🗑️</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -101,6 +112,7 @@ const emit = defineEmits<{ (e: 'open-project', project: Project): void }>()
 
 const projects = ref<Project[]>([])
 const isLoading = ref(true)
+const deletingId = ref<string | null>(null)
 
 const loadProjects = async () => {
   isLoading.value = true
@@ -116,6 +128,20 @@ const loadProjects = async () => {
 
 const openProject = (project: Project) => {
   emit('open-project', project)
+}
+
+const deleteProject = async (project: Project) => {
+  if (!confirm(`Delete "${project.filename}" permanently?\nThis cannot be undone.`)) return
+  deletingId.value = project.id
+  try {
+    await axios.delete(`/api/projects/${project.id}`)
+    projects.value = projects.value.filter(p => p.id !== project.id)
+  } catch (error) {
+    console.error('Failed to delete project:', error)
+    alert('Failed to delete project. See console for details.')
+  } finally {
+    deletingId.value = null
+  }
 }
 
 const formatDate = (timestamp = 0) => {
