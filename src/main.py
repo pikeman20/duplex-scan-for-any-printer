@@ -766,7 +766,7 @@ class ScanAgent:
         self.sessions = SessionManager(
             cfg.session_timeout_seconds,
             on_confirm=lambda s: process_session(cfg, s, self.notification_manager),
-            on_reject=lambda s: None,
+            on_reject=self._on_session_rejected,
             on_state_change=self._on_session_state_change,
         )
         self.watcher = FTPWatcher(cfg.inbox_base, cfg.subdirs, self._on_new_file)
@@ -781,6 +781,15 @@ class ScanAgent:
 
         # Wire internal agent API so the web UI and other processes can reach us
         agent_api.init(self.sessions, self.notification_manager, self._handle_telegram_command)
+
+    def _on_session_rejected(self, session: Session) -> None:
+        """Called by SessionManager when a session is rejected or times out.
+
+        Fires notify_session_action so all channels (e.g. Telegram) remove
+        pending-confirmation UI regardless of what triggered the rejection.
+        """
+        logger.info(f"Session rejected/timed-out: {session.id} (mode: {session.mode})")
+        self.notification_manager.notify_session_action(confirmed=False, action_by="timeout")
 
     def _on_session_state_change(self, session: Session, old_state: str, new_state: str) -> None:
         """Broadcast session state changes to all notification channels."""

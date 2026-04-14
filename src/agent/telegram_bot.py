@@ -32,6 +32,7 @@ class TelegramBot(NotificationChannel):
     """Telegram bot for handling scan session confirmations."""
 
     config: TelegramConfig
+    session_timeout_seconds: int = 120  # mirrors Config.session_timeout_seconds for display
     _application: Optional[Application] = field(default=None, repr=False)
     _running: bool = field(default=False, repr=False)
     _polling_loop: Optional[Any] = field(default=None, repr=False)  # event loop running run_polling
@@ -197,7 +198,7 @@ class TelegramBot(NotificationChannel):
             logger.warning("Telegram bot enabled but no bot token configured")
             return None
 
-        return cls(config=config.telegram)
+        return cls(config=config.telegram, session_timeout_seconds=config.session_timeout_seconds)
 
     def set_session_callback(self, callback: Any) -> None:
         """Set callback for session state changes."""
@@ -244,7 +245,7 @@ class TelegramBot(NotificationChannel):
             "/confirm - Confirm current session\n"
             "/reject - Reject current session\n\n"
             "⏱️ Sessions will auto-timeout after "
-            f"{self.config.confirm_timeout_seconds // 60} minutes of inactivity."
+            f"{self.session_timeout_seconds // 60} minutes of inactivity."
         )
 
         await update.message.reply_text(welcome_text, parse_mode="HTML")
@@ -263,7 +264,7 @@ class TelegramBot(NotificationChannel):
             "<b>/confirm</b> - Confirm the current scanning session and process it\n"
             "<b>/reject</b> - Reject and discard the current session\n\n"
             "<b>Note:</b> Only one session can be active at a time.\n"
-            f"Auto-timeout: {self.config.confirm_timeout_seconds // 60} minutes"
+            f"Auto-timeout: {self.session_timeout_seconds // 60} minutes"
         )
 
         keyboard = [
@@ -295,7 +296,7 @@ class TelegramBot(NotificationChannel):
             f"<b>Mode:</b> {session.get('mode', 'N/A')}\n"
             f"<b>State:</b> {session.get('state', 'N/A')}\n"
             f"<b>Images:</b> {session.get('image_count', 0)}\n"
-            f"<b>Timeout:</b> {self.config.confirm_timeout_seconds // 60} minutes"
+            f"<b>Timeout:</b> {self.session_timeout_seconds // 60} minutes"
         )
 
         keyboard = [

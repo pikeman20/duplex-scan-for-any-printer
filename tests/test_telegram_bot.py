@@ -26,7 +26,6 @@ def test_telegram_config_loading():
             "enabled": True,
             "bot_token": "test_token",
             "authorized_users": ["12345"],
-            "confirm_timeout_seconds": 300,
             "notify_on_session_ready": True
         }
     }
@@ -38,7 +37,6 @@ def test_telegram_config_loading():
         assert config.telegram.enabled == True
         assert config.telegram.bot_token == "test_token"
         assert config.telegram.authorized_users == ["12345"]
-        assert config.telegram.confirm_timeout_seconds == 300
         assert config.telegram.notify_on_session_ready == True
 
 
@@ -58,7 +56,6 @@ def test_telegram_config_env_override():
             "enabled": True,
             "bot_token": "yaml_token",
             "authorized_users": [],
-            "confirm_timeout_seconds": 300,
             "notify_on_session_ready": True
         }
     }
