@@ -830,10 +830,16 @@ class ScanAgent:
         # Process session outside of lock to avoid blocking
         if session_to_process:
             if confirm:
-                logger.info(f"Telegram confirmed session {session_to_process.id}")
+                logger.info(f"Session confirmed: {session_to_process.id}")
+                # Notify all channels to remove pending-confirmation UI (e.g. Telegram buttons).
+                # When the action came from Telegram, _do_confirm already snapshot+cleared the
+                # tracked messages, so this becomes a safe no-op for that channel.
+                self.notification_manager.notify_session_action(True, action_by="Web UI")
                 self.sessions.on_confirm_cb(session_to_process)
             else:
-                logger.info(f"Telegram rejected session {session_to_process.id}")
+                logger.info(f"Session rejected: {session_to_process.id}")
+                self.notification_manager.notify_session_action(False, action_by="Web UI")
+                self.sessions._cleanup_session_files(session_to_process)
                 self.sessions.on_reject_cb(session_to_process)
         else:
             if confirm:

@@ -58,6 +58,14 @@ class NotificationChannel(ABC):
     def stop(self) -> None:
         """Disconnect / stop polling."""
 
+    def notify_session_action(self, confirmed: bool, action_by: str = "external") -> None:
+        """Called when a session is confirmed/rejected from an external source (e.g. Web UI).
+
+        Channels that track in-flight notification messages (e.g. Telegram inline keyboards)
+        should use this to update/remove those messages.  Default is a no-op so existing
+        channel implementations don't need to override it.
+        """
+
 
 class NotificationManager:
     """Broadcasts session events to all registered channels."""
@@ -83,6 +91,14 @@ class NotificationManager:
                 ch.notify_session_processed(session_id, mode, success, pdf_path=pdf_path)
             except Exception as e:
                 logger.error("[%s] notify_session_processed failed: %s", ch.name, e)
+
+    def notify_session_action(self, confirmed: bool, action_by: str = "external") -> None:
+        """Broadcast confirm/reject action to all channels (for UI cleanup)."""
+        for ch in self._channels:
+            try:
+                ch.notify_session_action(confirmed, action_by)
+            except Exception as e:
+                logger.error("[%s] notify_session_action failed: %s", ch.name, e)
 
     def get_statuses(self) -> Dict[str, Dict[str, Any]]:
         return {ch.name: ch.status for ch in self._channels}

@@ -134,6 +134,41 @@ class TelegramBot(NotificationChannel):
                 logger.debug(f"Could not edit notification in chat {chat_id}: {e}")
         self._notification_messages.clear()
 
+    async def _edit_messages(self, messages: Dict[int, int], new_text: str) -> None:
+        """Edit an explicit snapshot of messages (chat_id → message_id) and remove buttons.
+
+        Takes a dict snapshot rather than reading the instance variable, so callers
+        can sync-clear _notification_messages before scheduling this coroutine without
+        risking a race condition.
+        """
+        _empty_kb = InlineKeyboardMarkup([])
+        for chat_id, message_id in messages.items():
+            try:
+                await self._application.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=new_text,
+                    parse_mode="HTML",
+                    reply_markup=_empty_kb,
+                )
+            except Exception as e:
+                logger.debug(f"Could not edit notification in chat {chat_id}: {e}")
+
+    def notify_session_action(self, confirmed: bool, action_by: str = "Web UI") -> None:
+        """NotificationChannel hook: edit tracked messages when action came from an external
+        source (e.g. Web UI).  When Telegram itself triggered the action, _do_confirm /
+        reject_command already snapshot+cleared _notification_messages synchronously, so
+        this dict is empty and the method is a safe no-op.
+        """
+        messages_snapshot = dict(self._notification_messages)
+        self._notification_messages.clear()
+        if not messages_snapshot:
+            return
+        label = "Confirmed" if confirmed else "Rejected"
+        icon = "⏳" if confirmed else "❌"
+        text = f"{icon} <b>Session {label}</b> from <i>{action_by}</i>"
+        self._schedule(self._edit_messages(messages_snapshot, text))
+
     def start(self) -> None:
         """Implement NotificationChannel.start() by starting polling."""
         self.start_polling()
@@ -307,15 +342,19 @@ class TelegramBot(NotificationChannel):
         # Remember who confirmed so we can send them the finished PDF
         self._confirmer_chat_id = update.effective_chat.id if update.effective_chat else user.id
 
-        # Edit the session-ready notification in ALL chats to remove buttons.
-        # _reply above already edited the tapped message; editing it again with the
-        # same text + empty keyboard is harmless and ensures other chats are cleaned up.
+        # Snapshot and sync-clear tracked messages BEFORE scheduling the edit.
+        # This prevents a race where _handle_telegram_command (called right after
+        # _session_callback below) sees a non-empty dict and double-edits.
         confirmer_name = user.first_name or str(user.id)
-        self._schedule(
-            self._edit_all_notifications(
-                f"⏳ <b>{label}</b> — processing…\n<i>Confirmed by {confirmer_name}</i>"
+        messages_snapshot = dict(self._notification_messages)
+        self._notification_messages.clear()
+        if messages_snapshot:
+            self._schedule(
+                self._edit_messages(
+                    messages_snapshot,
+                    f"⏳ <b>{label}</b> — processing…\n<i>Confirmed by {confirmer_name}</i>",
+                )
             )
-        )
 
         try:
             self._session_callback(confirm=True, print_requested=print_requested)
@@ -341,13 +380,17 @@ class TelegramBot(NotificationChannel):
             await self._reply(update, "⚠️ Bot not connected to session manager.")
             return
         await self._reply(update, "\u23f3 Reject received \u2014 cleaning up\u2026")
-        # Edit session-ready notifications in ALL chats to remove buttons
+        # Snapshot and sync-clear before scheduling edit (prevents race with _handle_telegram_command)
         rejecter_name = user.first_name or str(user.id)
-        self._schedule(
-            self._edit_all_notifications(
-                f"\u274c <b>Session rejected</b> by {rejecter_name}"
+        messages_snapshot = dict(self._notification_messages)
+        self._notification_messages.clear()
+        if messages_snapshot:
+            self._schedule(
+                self._edit_messages(
+                    messages_snapshot,
+                    f"\u274c <b>Session rejected</b> by {rejecter_name}",
+                )
             )
-        )
         try:
             self._session_callback(confirm=False, print_requested=False)
             self._latest_session_info = None
