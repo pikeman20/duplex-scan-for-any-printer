@@ -60,19 +60,34 @@ def get_scan_inbox_dir():
 SCAN_OUT_DIR = os.getenv("SCAN_OUTPUT_DIR", get_scan_dir())
 SCAN_INBOX_DIR = os.getenv("SCAN_INBOX_DIR", get_scan_inbox_dir())
 WEB_UI_PORT = int(os.getenv("WEB_UI_PORT", "8099"))
+# Internal agent API URL (scan agent exposes session/channel state here)
+AGENT_API_URL = os.getenv("AGENT_API_URL", "http://127.0.0.1:8098")
 # Always operate in low-resource mode by default to support low-power devices (Raspberry Pi, etc.)
 # We'll cap background thumbnail workers to a small number and use memory-efficient resizing.
 DEFAULT_MAX_WORKERS = 2
 
+# Fix broken SSL_CERT_FILE env var (may be set by another venv/project).
+# httpx creates an SSL context at client init time even for plain http:// calls,
+# so an invalid SSL_CERT_FILE raises FileNotFoundError before any request is made.
+_ssl_cert = os.environ.get("SSL_CERT_FILE", "")
+if _ssl_cert and not os.path.exists(_ssl_cert):
+    try:
+        import certifi
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+    except ImportError:
+        del os.environ["SSL_CERT_FILE"]
+
+import httpx
+
+def _local_client() -> httpx.AsyncClient:
+    """Return an httpx client suitable for localhost-only calls.
+
+    Using verify=False is safe here because all traffic stays on the loopback
+    interface (127.0.0.1) and never leaves the machine.
+    """
+    return httpx.AsyncClient(verify=False)
+
 app = FastAPI(title="Scan Editor API", version="1.0.0")
-
-# Global variable to hold telegram bot instance (set by main application)
-telegram_bot_instance = None
-
-def set_telegram_bot(bot):
-    """Set the telegram bot instance for API access."""
-    global telegram_bot_instance
-    telegram_bot_instance = bot
 
 # Ensure package imports like `agent.*` work when running under uvicorn from project root.
 # The `agent` package lives in the same `src/` directory as this file, so add that
@@ -158,44 +173,95 @@ async def health_check():
 
 @app.get("/api/bot/status")
 async def bot_status():
-    """Get Telegram bot status."""
-    if telegram_bot_instance is None:
-        return JSONResponse(
-            content={
-                "enabled": False,
-                "connected": False,
-                "pending_sessions": 0,
-                "authorized_users": 0,
-                "message": "Bot not initialized"
-            }
-        )
+    """Get notification channel statuses from the scan agent."""
+    try:
+        async with _local_client() as client:
+            resp = await client.get(f"{AGENT_API_URL}/api/channels/status", timeout=2.0)
+            channels = resp.json().get("channels", {})
+    except Exception:
+        channels = {}
 
-    # For now, return basic status - would need proper integration for real-time data
-    return JSONResponse(
-        content={
-            "enabled": telegram_bot_instance.config.enabled,
-            "connected": telegram_bot_instance._running if hasattr(telegram_bot_instance, '_running') else False,
-            "pending_sessions": 1 if hasattr(telegram_bot_instance, '_latest_session_info') and telegram_bot_instance._latest_session_info else 0,
-            "authorized_users": len(telegram_bot_instance._authorized_chats) if hasattr(telegram_bot_instance, '_authorized_chats') else 0,
-            "message": "Bot operational" if telegram_bot_instance._running else "Bot stopped"
-        }
-    )
+    telegram = channels.get("telegram", {})
+    return JSONResponse({
+        "enabled": telegram.get("enabled", False),
+        "connected": telegram.get("connected", False),
+        "pending_sessions": 1 if telegram.get("pending_session", False) else 0,
+        "authorized_users": telegram.get("authorized_users", 0),
+        "message": telegram.get("message", "Agent not reachable"),
+        "channels": channels,
+    })
 
 
-@app.get("/api/session/status")
+@app.get("/api/bot/info")
+async def bot_info():
+    """Return Telegram registered chats / notify_chat_ids for the settings UI."""
+    try:
+        async with _local_client() as client:
+            resp = await client.get(f"{AGENT_API_URL}/api/channels/telegram/info", timeout=2.0)
+            return JSONResponse(resp.json())
+    except Exception:
+        return JSONResponse({"registered_chats": {}, "notify_chat_ids": []})
 async def session_status():
-    """Get current session status (placeholder - would need integration with session manager)."""
-    # This would need to be integrated with the actual session manager
-    return JSONResponse(
-        content={
+    """Get current session status from the scan agent."""
+    try:
+        async with _local_client() as client:
+            resp = await client.get(f"{AGENT_API_URL}/api/session/current", timeout=2.0)
+            data = resp.json()
+    except Exception:
+        return JSONResponse({
             "current_session_id": None,
             "state": "COLLECTING",
             "mode": "unknown",
             "image_count": 0,
             "timeout_seconds": 300,
-            "message": "Session status not available via API yet"
-        }
-    )
+            "message": "Agent not reachable",
+        })
+
+    session = data.get("session")
+    if not session:
+        return JSONResponse({
+            "current_session_id": None,
+            "state": "COLLECTING",
+            "mode": "unknown",
+            "image_count": 0,
+            "timeout_seconds": 300,
+            "message": "No active session",
+        })
+
+    return JSONResponse({
+        "current_session_id": session.get("id"),
+        "state": session.get("state", "COLLECTING"),
+        "mode": session.get("mode", "unknown"),
+        "image_count": session.get("image_count", 0),
+        "timeout_seconds": 300,
+        "message": f"Session {session.get('id')} — {session.get('state')}",
+    })
+
+
+@app.post("/api/session/confirm")
+async def session_confirm_proxy(print_requested: bool = False):
+    """Forward confirm command to scan agent."""
+    try:
+        async with _local_client() as client:
+            resp = await client.post(
+                f"{AGENT_API_URL}/api/session/confirm",
+                params={"print_requested": print_requested},
+                timeout=5.0,
+            )
+            return JSONResponse(resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        return JSONResponse({"ok": False, "message": str(e)}, status_code=503)
+
+
+@app.post("/api/session/reject")
+async def session_reject_proxy():
+    """Forward reject command to scan agent."""
+    try:
+        async with _local_client() as client:
+            resp = await client.post(f"{AGENT_API_URL}/api/session/reject", timeout=5.0)
+            return JSONResponse(resp.json(), status_code=resp.status_code)
+    except Exception as e:
+        return JSONResponse({"ok": False, "message": str(e)}, status_code=503)
 
 
 @app.get("/api/projects")

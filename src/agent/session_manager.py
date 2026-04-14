@@ -23,6 +23,7 @@ class Session:
     last_activity: float = field(default_factory=lambda: time.time())
     state: str = STATE_COLLECTING
     print_requested: bool = False  # True if confirm_print, False if confirm
+    confirmer_chat_id: Optional[int] = None  # chat that confirmed, used to send back the PDF
 
 
 class SessionManager:

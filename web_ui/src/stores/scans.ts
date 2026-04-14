@@ -7,6 +7,12 @@ export interface BotStatus {
   pending_sessions: number
   authorized_users: number
   message: string
+  channels?: Record<string, any>
+}
+
+export interface BotInfo {
+  registered_chats: Record<string, number>  // user_id -> chat_id
+  notify_chat_ids: string[]
 }
 
 export interface SessionStatus {
@@ -24,7 +30,8 @@ export const useScansStore = defineStore('scans', {
     isLoading: false,
     error: null as string | null,
     botStatus: null as BotStatus | null,
-    sessionStatus: null as SessionStatus | null
+    botInfo: null as BotInfo | null,
+    sessionStatus: null as SessionStatus | null,
   }),
 
   getters: {
@@ -32,14 +39,13 @@ export const useScansStore = defineStore('scans', {
     recentScans: (state: any) => state.scans.slice(0, 10),
     isBotEnabled: (state: any) => state.botStatus?.enabled ?? false,
     isBotConnected: (state: any) => state.botStatus?.connected ?? false,
-    hasPendingSession: (state: any) => state.sessionStatus?.state === 'WAIT_CONFIRM'
+    hasPendingSession: (state: any) => state.sessionStatus?.state === 'WAIT_CONFIRM',
   },
 
   actions: {
     async fetchScans() {
       this.isLoading = true
       this.error = null
-
       try {
         const response = await axios.get('/api/scans')
         this.scans = response.data.scans
@@ -60,12 +66,41 @@ export const useScansStore = defineStore('scans', {
       }
     },
 
+    async fetchBotInfo() {
+      try {
+        const response = await axios.get('/api/bot/info')
+        this.botInfo = response.data
+      } catch (error) {
+        console.error('Failed to fetch bot info:', error)
+      }
+    },
+
     async fetchSessionStatus() {
       try {
         const response = await axios.get('/api/session/status')
         this.sessionStatus = response.data
       } catch (error) {
         console.error('Failed to fetch session status:', error)
+      }
+    },
+
+    async confirmSession(printRequested = false): Promise<{ ok: boolean; message?: string }> {
+      try {
+        const response = await axios.post(`/api/session/confirm?print_requested=${printRequested}`)
+        await this.fetchSessionStatus()
+        return response.data
+      } catch (error: any) {
+        return { ok: false, message: error.message }
+      }
+    },
+
+    async rejectSession(): Promise<{ ok: boolean; message?: string }> {
+      try {
+        const response = await axios.post('/api/session/reject')
+        await this.fetchSessionStatus()
+        return response.data
+      } catch (error: any) {
+        return { ok: false, message: error.message }
       }
     },
 
@@ -81,6 +116,6 @@ export const useScansStore = defineStore('scans', {
 
     getScanByFilename(filename: string) {
       return this.scans.find((scan: any) => scan.filename === filename)
-    }
-  }
+    },
+  },
 })

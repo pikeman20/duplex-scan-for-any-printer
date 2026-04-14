@@ -19,9 +19,10 @@ from pathlib import Path
 
 from src.orchestrator_utils import (
     check_port_available, create_default_config, install_service,
-    log_event, open_log_file, print_banner, setup_log_dir,
+    log_event, print_banner, setup_log_dir,
     setup_orchestrator_log, setup_signal_handlers, spawn_child,
-    terminate_children, validate_prerequisites,
+    stream_child_output, terminate_children, validate_prerequisites,
+    _enable_ansi_windows,
 )
 
 
@@ -61,6 +62,9 @@ def main():
     parser.add_argument('--install-service', action='store_true', help='Install as systemd service')
     args = parser.parse_args()
 
+    # Enable ANSI colors on Windows 10+
+    _enable_ansi_windows()
+
     # Auto-config
     config_path = args.config or "config.yaml"
     if not Path(config_path).exists():
@@ -82,33 +86,45 @@ def main():
     if not args.no_web:
         check_port_available(8099, "Web UI")
 
-    # Setup logging
+    # Setup logging directory (for orchestrator log only)
     log_dir = setup_log_dir()
     orch_log = setup_orchestrator_log(log_dir)
-    log_files = {}
 
-    # Spawn children
-    children = []
-    services = []
+    # Spawn children and prepare streaming
+    children = []          # list of (name, proc, stdout_pipe)
+    stream_threads = []    # list of threading.Thread for stdout streaming
+    services = []          # list of (display_name, info) for banner
 
     # Scan agent (always runs)
-    log_files["agent"] = open_log_file(log_dir, "agent")
     agent_cmd = [sys.executable, "-m", "src.main", "--config", config_path]
-    children.append(spawn_child("agent", agent_cmd, log_file_handle=log_files["agent"]))
+    name, proc, pipe = spawn_child("agent", agent_cmd)
+    children.append((name, proc, pipe))
+    if pipe:
+        t = threading.Thread(target=stream_child_output, args=(name, pipe), daemon=True)
+        t.start()
+        stream_threads.append(t)
     services.append(("Scan Agent", f"watching {config_path}"))
 
     # FTP server (optional)
     if not args.no_ftp:
-        log_files["ftp"] = open_log_file(log_dir, "ftp")
         ftp_cmd = [sys.executable, "start_ftp_server.py"]
-        children.append(spawn_child("ftp", ftp_cmd, log_file_handle=log_files["ftp"]))
+        name, proc, pipe = spawn_child("ftp", ftp_cmd)
+        children.append((name, proc, pipe))
+        if pipe:
+            t = threading.Thread(target=stream_child_output, args=(name, pipe), daemon=True)
+            t.start()
+            stream_threads.append(t)
         services.append(("FTP Server", "ftp://0.0.0.0:2121"))
 
     # Web UI (optional)
     if not args.no_web:
-        log_files["web"] = open_log_file(log_dir, "web")
         web_cmd = [sys.executable, "-m", "src.web_ui_server"]
-        children.append(spawn_child("web", web_cmd, log_file_handle=log_files["web"]))
+        name, proc, pipe = spawn_child("web", web_cmd)
+        children.append((name, proc, pipe))
+        if pipe:
+            t = threading.Thread(target=stream_child_output, args=(name, pipe), daemon=True)
+            t.start()
+            stream_threads.append(t)
         services.append(("Web UI", "http://localhost:8099 (browser)"))
 
     # Banner and signal handlers
@@ -122,11 +138,10 @@ def main():
     exit_code = 0
     try:
         while not shutdown_event.is_set():
-            for name, proc in children:
+            for name, proc, _ in children:
                 ret = proc.poll()
                 if ret is not None:
                     log_event(orch_log, f"ERROR: {name} exited unexpectedly (code {ret})")
-                    log_event(orch_log, f"  Check logs/{name}.log for details")
                     exit_code = 1
                     shutdown_event.set()
                     break
@@ -138,8 +153,7 @@ def main():
     log_event(orch_log, "Shutting down all services...")
     terminate_children(children, lambda msg: log_event(orch_log, msg))
 
-    for f in log_files.values():
-        f.close()
+    # Close orchestrator log
     orch_log.close()
 
     sys.exit(exit_code)

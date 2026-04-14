@@ -53,14 +53,18 @@ from agent.error_handler import (safe_execute, retry_on_failure, handle_session_
 from agent.config_validator import validate_config
 from agent.resource_monitor import ResourceMonitor, schedule_periodic_cleanup
 from agent.telegram_bot import TelegramBot
+from agent.notification_manager import NotificationManager
+from agent import agent_api
 
-def process_session(cfg: Config, s: Session):
+def process_session(cfg: Config, s: Session, notification_manager=None):
     """Process a confirmed session with error handling."""
     session_start = time.time()
     
     # Set logging context for this session
     logger.set_session_context(s.id, s.mode)
     
+    success = False
+    out_pdf = None
     try:
         logger.info("="*80)
         logger.info(f"Session processing started: {s.id} (mode: {s.mode})")
@@ -100,13 +104,18 @@ def process_session(cfg: Config, s: Session):
         except Exception as e:
             logger.warning(f"Failed to prepare project storage for session {s.id}: {e}")
 
-        _process_session_inner(cfg, s, session_start)
+        out_pdf = _process_session_inner(cfg, s, session_start)
+        success = True
         
     except Exception as e:
         handle_session_error(s.id, s.mode, e)
         logger.error(f"❌ Session processing failed: {s.id}")
     finally:
         logger.clear_session_context()
+        if notification_manager is not None:
+            notification_manager.notify_session_processed(
+                s.id, s.mode, success, pdf_path=out_pdf
+            )
 
 
 def _process_session_inner(cfg: Config, s: Session, session_start: float):
@@ -705,7 +714,7 @@ def _process_session_inner(cfg: Config, s: Session, session_start: float):
 
     else:
         # Unknown mode: do nothing
-        return
+        return None
 
     # Unload background removal model to free RAM (~750MB saved)
     # Applies to both scan_document and card_2in1 modes
@@ -738,23 +747,30 @@ def _process_session_inner(cfg: Config, s: Session, session_start: float):
         if failed_count > 0:
             logger.warning(f"⚠️  Failed to delete {failed_count} files (may need manual cleanup)")
 
+    return out_path  # Color PDF path for notification delivery
+
 
 class ScanAgent:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
-        # Initialize Telegram bot if enabled
-        self.telegram_bot = TelegramBot.from_config(cfg)
+        # Build notification channels (Telegram + any future channels)
+        channels = []
+        bot = TelegramBot.from_config(cfg)
+        if bot:
+            bot.set_session_callback(self._handle_telegram_command)
+            channels.append(bot)
+        self.notification_manager = NotificationManager(channels)
 
-        # Session manager with callbacks for processing and bot notifications
+        # Session manager with callbacks for processing and notifications
         self.sessions = SessionManager(
             cfg.session_timeout_seconds,
-            on_confirm=lambda s: process_session(cfg, s),
+            on_confirm=lambda s: process_session(cfg, s, self.notification_manager),
             on_reject=lambda s: None,
-            on_state_change=self._on_session_state_change if self.telegram_bot else None
+            on_state_change=self._on_session_state_change,
         )
         self.watcher = FTPWatcher(cfg.inbox_base, cfg.subdirs, self._on_new_file)
-        
+
         # Async processing with priority queues
         # Priority queue: (priority, timestamp, data)
         # Priority 0 = signals (confirm/reject), Priority 1 = images
@@ -763,16 +779,11 @@ class ScanAgent:
         self.worker_thread = threading.Thread(target=self._process_events, daemon=True)
         self.running = False
 
-        # Telegram bot integration
-        if self.telegram_bot:
-            self.telegram_bot.set_session_callback(self._handle_telegram_command)
+        # Wire internal agent API so the web UI and other processes can reach us
+        agent_api.init(self.sessions, self.notification_manager, self._handle_telegram_command)
 
     def _on_session_state_change(self, session: Session, old_state: str, new_state: str) -> None:
-        """Handle session state changes for Telegram bot notifications."""
-        if not self.telegram_bot or not self.cfg.telegram.notify_on_session_ready:
-            return
-
-        # Notify when session enters WAIT_CONFIRM state
+        """Broadcast session state changes to all notification channels."""
         if new_state == "WAIT_CONFIRM":
             session_info = {
                 "id": session.id,
@@ -780,7 +791,7 @@ class ScanAgent:
                 "state": new_state,
                 "image_count": len(session.images),
             }
-            self.telegram_bot.update_session_info(session_info)
+            self.notification_manager.notify_session_ready(session_info)
             logger.info(f"Session {session.id} ready for confirmation (mode: {session.mode})")
 
     def _handle_telegram_command(self, confirm: bool, print_requested: bool) -> None:
@@ -904,13 +915,11 @@ class ScanAgent:
         self.worker_thread.start()
         self.watcher.start()
 
-        # Start Telegram bot if enabled
-        if self.telegram_bot:
-            self.telegram_bot.start_polling()
-            # Set bot instance for web UI API
-            from web_ui_server import set_telegram_bot
-            set_telegram_bot(self.telegram_bot)
-            logger.info("Telegram bot started")
+        # Start all notification channels (Telegram, future channels, etc.)
+        self.notification_manager.start_all()
+
+        # Start internal agent API so web UI and other processes can reach us
+        agent_api.start_in_thread()
 
         print("[ScanAgent] Started (async mode)")
 
@@ -918,12 +927,7 @@ class ScanAgent:
         print("[ScanAgent] Stopping...")
         self.running = False
         self.watcher.stop()
-
-        # Stop Telegram bot if enabled
-        if self.telegram_bot:
-            self.telegram_bot.stop()
-            logger.info("Telegram bot stopped")
-
+        self.notification_manager.stop_all()
         self.worker_thread.join(timeout=5)
         print("[ScanAgent] Stopped")
 
@@ -934,9 +938,9 @@ def main():
     args = ap.parse_args()
     
     # Initialize logger first
-    logger.info("┌" + "─"*78 + "┐")
-    logger.info("│" + " "*25 + "SCAN AGENT STARTING" + " "*34 + "│")
-    logger.info("└" + "─"*78 + "┘")
+    logger.info("+" + "-"*78 + "+")
+    logger.info("|" + " "*25 + "SCAN AGENT STARTING" + " "*34 + "|")
+    logger.info("+" + "-"*78 + "+")
     
     # Load and validate configuration
     logger.info(f"📄 Loading configuration from: {args.config}")

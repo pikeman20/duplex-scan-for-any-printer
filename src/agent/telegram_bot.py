@@ -22,20 +22,111 @@ from telegram.ext import (
 )
 
 from agent.config import Config, TelegramConfig
+from agent.notification_manager import NotificationChannel
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class TelegramBot:
+class TelegramBot(NotificationChannel):
     """Telegram bot for handling scan session confirmations."""
 
     config: TelegramConfig
     _application: Optional[Application] = field(default=None, repr=False)
     _running: bool = field(default=False, repr=False)
+    _polling_loop: Optional[Any] = field(default=None, repr=False)  # event loop running run_polling
     _authorized_chats: Dict[int, int] = field(default_factory=dict)  # user_id -> chat_id
     _session_callback: Optional[Any] = field(default=None, repr=False)
     _latest_session_info: Optional[Dict] = field(default=None, repr=False)
+    _confirmer_chat_id: Optional[int] = field(default=None, repr=False)  # who confirmed — gets the PDF
+
+    @property
+    def name(self) -> str:
+        return "telegram"
+
+    @property
+    def status(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.config.enabled,
+            "connected": self._running,
+            "authorized_users": len(self._authorized_chats),
+            "notify_chat_ids": self.config.notify_chat_ids,
+            "registered_chats": {str(uid): cid for uid, cid in self._authorized_chats.items()},
+            "pending_session": self._latest_session_info is not None,
+            "message": "Bot operational" if self._running else "Bot stopped",
+        }
+
+    def notify_session_ready(self, session_info: Dict[str, Any]) -> None:
+        """Store session info and notify all registered chats with inline confirm/reject buttons."""
+        self.update_session_info(session_info)
+        if not self.config.notify_on_session_ready:
+            return
+        msg = (
+            f"\U0001f4c4 <b>Session Ready for Confirmation</b>\n\n"
+            f"<b>ID:</b> {session_info.get('id', 'N/A')}\n"
+            f"<b>Mode:</b> {session_info.get('mode', 'N/A')}\n"
+            f"<b>Images:</b> {session_info.get('image_count', 0)}"
+        )
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("\u2705 Confirm", callback_data="cmd_confirm"),
+                InlineKeyboardButton("\U0001f5a8 Confirm + Print", callback_data="cmd_confirm_print"),
+            ],
+            [InlineKeyboardButton("\u274c Reject", callback_data="cmd_reject")],
+        ])
+        self.send_notification(msg, reply_markup=keyboard)
+
+    def notify_session_processed(
+        self,
+        session_id: str,
+        mode: str,
+        success: bool,
+        pdf_path: Optional[str] = None,
+    ) -> None:
+        """Notify chats that a session has been processed, and send the PDF to the confirmer."""
+        icon = "\u2705" if success else "\u274c"
+        action = "ready" if success else "failed"
+        summary = f"{icon} <b>Session {action}</b>\n<b>ID:</b> {session_id}\n<b>Mode:</b> {mode}"
+        self.send_notification(summary)
+
+        # Send PDF document to whoever pressed Confirm (if available)
+        if success and pdf_path and self._confirmer_chat_id:
+            self._schedule(
+                self._send_pdf(self._confirmer_chat_id, pdf_path, session_id)
+            )
+        self._latest_session_info = None
+        self._confirmer_chat_id = None
+
+    async def _send_pdf(self, chat_id: int, pdf_path: str, session_id: str) -> None:
+        """Send the finished PDF as a document to a specific chat."""
+        import os
+        if not os.path.exists(pdf_path):
+            logger.warning(f"PDF not found, cannot send: {pdf_path}")
+            return
+        try:
+            with open(pdf_path, "rb") as f:
+                await self._application.bot.send_document(
+                    chat_id=chat_id,
+                    document=f,
+                    filename=os.path.basename(pdf_path),
+                    caption=f"\U0001f4c4 <b>{session_id}</b>",
+                    parse_mode="HTML",
+                )
+        except Exception as e:
+            logger.error(f"Failed to send PDF to chat {chat_id}: {e}")
+
+    def start(self) -> None:
+        """Implement NotificationChannel.start() by starting polling."""
+        self.start_polling()
+
+    def _schedule(self, coro) -> None:
+        """Schedule a coroutine on the bot polling loop from any thread."""
+        import asyncio
+        loop = self._polling_loop
+        if loop and loop.is_running():
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        else:
+            logger.warning("Bot event loop not available — notification dropped")
 
     @classmethod
     def from_config(cls, config: Config) -> Optional["TelegramBot"]:
@@ -63,7 +154,9 @@ class TelegramBot:
         if not self.config.authorized_users:
             # No authorized users configured - allow anyone
             return True
-        return str(user_id) in self.config.authorized_users
+        # Compare as strings to handle both int and str values in config
+        str_id = str(user_id)
+        return any(str(u) == str_id for u in self.config.authorized_users)
 
     def register_chat(self, user_id: int, chat_id: int) -> None:
         """Register a user's chat ID for notifications."""
@@ -155,54 +248,70 @@ class TelegramBot:
 
         await update.message.reply_text(status_text, parse_mode="HTML", reply_markup=reply_markup)
 
+    async def _reply(self, update: Update, text: str) -> None:
+        """Reply to either a message or a callback_query edit."""
+        if update.callback_query:
+            try:
+                await update.callback_query.edit_message_text(text, parse_mode="HTML")
+            except Exception:
+                await update.callback_query.message.reply_text(text, parse_mode="HTML")
+        elif update.message:
+            await update.message.reply_text(text, parse_mode="HTML")
+
+    async def _do_confirm(self, update: Update, print_requested: bool = False) -> None:
+        """Shared confirm logic used by /confirm command and inline buttons."""
+        user = update.effective_user
+        if not self.is_authorized(user.id):
+            await self._reply(update, "❌ You are not authorized to use this bot.")
+            return
+        if not self._latest_session_info:
+            await self._reply(update, "❌ No active session to confirm.")
+            return
+        if not self._session_callback:
+            await self._reply(update, "⚠️ Bot not connected to session manager.")
+            return
+
+        # Immediately acknowledge — user knows the tap/click was received
+        label = "Confirm + Print" if print_requested else "Confirm"
+        await self._reply(
+            update,
+            f"⏳ <b>{label}</b> received — processing…\n\nYou will receive the PDF when done.",
+        )
+
+        # Remember who confirmed so we can send them the finished PDF
+        self._confirmer_chat_id = update.effective_chat.id if update.effective_chat else user.id
+
+        try:
+            self._session_callback(confirm=True, print_requested=print_requested)
+        except Exception as e:
+            logger.error(f"Error confirming session: {e}")
+            self._confirmer_chat_id = None
+            await self._reply(update, f"❌ Error confirming session: {e}")
+
     async def confirm_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /confirm command."""
-        if not self.is_authorized(update.effective_user.id):
-            await update.message.reply_text("❌ You are not authorized to use this bot.")
-            return
-
-        if not self._latest_session_info:
-            await update.message.reply_text("❌ No active session to confirm.")
-            return
-
-        if self._session_callback:
-            try:
-                # Call the confirm callback with print_requested=False (default)
-                self._session_callback(confirm=True, print_requested=False)
-                await update.message.reply_text(
-                    "✅ Session confirmed! Processing will begin shortly."
-                )
-            except Exception as e:
-                logger.error(f"Error confirming session: {e}")
-                await update.message.reply_text(
-                    f"❌ Error confirming session: {str(e)}"
-                )
-        else:
-            await update.message.reply_text("⚠️ Bot not connected to session manager.")
+        await self._do_confirm(update, print_requested=False)
 
     async def reject_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /reject command."""
-        if not self.is_authorized(update.effective_user.id):
-            await update.message.reply_text("❌ You are not authorized to use this bot.")
+        user = update.effective_user
+        if not self.is_authorized(user.id):
+            await self._reply(update, "❌ You are not authorized to use this bot.")
             return
-
         if not self._latest_session_info:
-            await update.message.reply_text("❌ No active session to reject.")
+            await self._reply(update, "❌ No active session to reject.")
             return
-
-        if self._session_callback:
-            try:
-                self._session_callback(confirm=False, print_requested=False)
-                await update.message.reply_text(
-                    "❌ Session rejected. Images will be cleaned up."
-                )
-            except Exception as e:
-                logger.error(f"Error rejecting session: {e}")
-                await update.message.reply_text(
-                    f"❌ Error rejecting session: {str(e)}"
-                )
-        else:
-            await update.message.reply_text("⚠️ Bot not connected to session manager.")
+        if not self._session_callback:
+            await self._reply(update, "⚠️ Bot not connected to session manager.")
+            return
+        await self._reply(update, "\u23f3 Reject received \u2014 cleaning up\u2026")
+        try:
+            self._session_callback(confirm=False, print_requested=False)
+            self._latest_session_info = None
+            self._confirmer_chat_id = None
+        except Exception as e:
+            logger.error(f"Error rejecting session: {e}")
+            await self._reply(update, f"❌ Error rejecting session: {e}")
 
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle inline button callbacks."""
@@ -218,7 +327,9 @@ class TelegramBot:
         if data == "cmd_status":
             await self.status_command(update, context)
         elif data == "cmd_confirm":
-            await self.confirm_command(update, context)
+            await self._do_confirm(update, print_requested=False)
+        elif data == "cmd_confirm_print":
+            await self._do_confirm(update, print_requested=True)
         elif data == "cmd_reject":
             await self.reject_command(update, context)
 
@@ -241,6 +352,18 @@ class TelegramBot:
             return
 
         try:
+            # Fix: SSL_CERT_FILE may point to a missing file (e.g., from another project's env).
+            # Override it with certifi's bundled CA certificates so httpx/telegram can build SSL context.
+            ssl_cert_file = os.environ.get("SSL_CERT_FILE", "")
+            if ssl_cert_file and not os.path.exists(ssl_cert_file):
+                try:
+                    import certifi
+                    os.environ["SSL_CERT_FILE"] = certifi.where()
+                    logger.info(f"SSL_CERT_FILE was invalid ({ssl_cert_file!r}), overriding with certifi: {certifi.where()}")
+                except ImportError:
+                    del os.environ["SSL_CERT_FILE"]
+                    logger.info(f"SSL_CERT_FILE was invalid ({ssl_cert_file!r}), unset to use system defaults")
+
             # Build application
             self._application = (
                 Application.builder()
@@ -264,17 +387,23 @@ class TelegramBot:
             # Add error handler
             self._application.add_error_handler(self.error_handler)
 
-            # Start polling in background with restart logic
+            # Start polling in a dedicated event loop so we can schedule
+            # send_notification calls onto it from other threads.
             def run_polling():
                 import asyncio
                 import time
                 max_retries = 5
-                retry_delay = 10  # seconds between retries
+                retry_delay = 10
 
                 for attempt in range(max_retries):
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    self._polling_loop = loop
                     try:
                         logger.info(f"Bot polling started (attempt {attempt + 1}/{max_retries})")
-                        asyncio.run(self._application.run_polling(drop_pending_updates=True))
+                        loop.run_until_complete(
+                            self._application.run_polling(drop_pending_updates=True)
+                        )
                     except Exception as e:
                         if attempt < max_retries - 1:
                             logger.warning(f"Bot polling crashed, restarting in {retry_delay}s: {e}")
@@ -282,9 +411,15 @@ class TelegramBot:
                         else:
                             logger.error(f"Bot polling failed after {max_retries} attempts: {e}")
                             self._running = False
+                    finally:
+                        try:
+                            loop.close()
+                        except Exception:
+                            pass
+                        self._polling_loop = None
 
             self._running = True
-            threading.Thread(target=run_polling, daemon=True).start()
+            threading.Thread(target=run_polling, daemon=True, name="telegram-polling").start()
             logger.info("Telegram bot started successfully")
 
         except Exception as e:
@@ -302,39 +437,53 @@ class TelegramBot:
         self._running = False
         logger.info("Telegram bot stopped")
 
-    def send_notification(self, message: str, parse_mode: str = "HTML") -> None:
-        """Send notification to all authorized users."""
+    def send_notification(
+        self,
+        message: str,
+        parse_mode: str = "HTML",
+        reply_markup: Optional[InlineKeyboardMarkup] = None,
+    ) -> None:
+        """Send a message to all configured and registered chat IDs."""
         if not self._running or not self._application:
             logger.warning("Cannot send notification: bot not running")
             return
 
-        # Schedule async send in the application's event loop
-        try:
-            import asyncio
-
-            async def _send_to_all():
-                for user_id, chat_id in self._authorized_chats.items():
-                    try:
-                        await self._application.bot.send_message(
-                            chat_id=chat_id,
-                            text=message,
-                            parse_mode=parse_mode
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to send notification to user {user_id}: {e}")
-
-            # Try to get the running loop from the application
+        # Merge pre-configured chat IDs with dynamically registered ones.
+        chat_ids: set = set()
+        for cid in self.config.notify_chat_ids:
             try:
-                loop = self._application.loop
-                if loop.is_running():
-                    asyncio.run_coroutine_threadsafe(_send_to_all(), loop)
-                else:
-                    logger.warning("Bot event loop not running, cannot send notification")
-            except AttributeError:
-                # Fallback: create new event loop for this notification
-                asyncio.run(_send_to_all())
-        except Exception as e:
-            logger.error(f"Error scheduling notification: {e}")
+                chat_ids.add(int(cid))
+            except (ValueError, TypeError):
+                pass
+        chat_ids.update(self._authorized_chats.values())
+
+        if not chat_ids:
+            logger.warning(
+                "No chat IDs to notify. Add your chat ID to notify_chat_ids in config.yaml "
+                "or send /start to the bot in a private chat."
+            )
+            return
+
+        async def _send_to_all() -> None:
+            for chat_id in chat_ids:
+                try:
+                    await self._application.bot.send_message(
+                        chat_id=chat_id,
+                        text=message,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup,
+                    )
+                except Exception as e:
+                    err = str(e)
+                    if "Forbidden" in err or "bot can't initiate" in err:
+                        logger.warning(
+                            f"Cannot DM chat {chat_id}: user hasn't started the bot in private. "
+                            "Ask them to open the bot and send /start."
+                        )
+                    else:
+                        logger.error(f"Failed to send notification to chat {chat_id}: {e}")
+
+        self._schedule(_send_to_all())
 
 
 # Import CallbackQueryHandler at module level for the handler

@@ -5,7 +5,10 @@
       "Bash(python:*)",
       "Bash(dir plans:*)",
       "Bash(git:*)",
-      "Bash(pytest:*)"
+      "Bash(pytest:*)",
+      "Bash(start python:*)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :8099)"
     ]
   }
 }

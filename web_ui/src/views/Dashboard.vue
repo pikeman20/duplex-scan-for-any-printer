@@ -2,73 +2,115 @@
 <style scoped src="./Dashboard.css"></style>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import type { Ref } from 'vue';
-// Import existing stores
-import { useScansStore } from '@/stores/scans';
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useScansStore } from '@/stores/scans'
 
-// Status refresh interval (30 seconds)
-const STATUS_REFRESH_INTERVAL = 30000;
+const STATUS_REFRESH_INTERVAL = 10_000
 
-// Initialize stores
-const scansStore = useScansStore();
+const scansStore = useScansStore()
+const statusTimer = ref<ReturnType<typeof setInterval> | null>(null)
 
-// Timer for periodic updates
-const statusTimer = ref<NodeJS.Timeout | null>(null);
+// ── Bot settings modal ──────────────────────────────────────────────────────
+const showBotSettings = ref(false)
+const copyToast = ref('')
 
-// Computed properties for status classes
+const registeredChatEntries = computed(() =>
+  Object.entries(scansStore.botInfo?.registered_chats ?? {})
+)
+
+function openBotSettings() {
+  showBotSettings.value = true
+  scansStore.fetchBotInfo()
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    showToast(`Copied: ${text}`)
+  } catch {
+    showToast('Copy failed')
+  }
+}
+
+async function copyYamlSnippet() {
+  const ids = scansStore.botInfo?.registered_chats
+    ? Object.values(scansStore.botInfo.registered_chats)
+    : []
+  const snippet =
+    ids.length
+      ? `telegram:\n  notify_chat_ids:\n${ids.map(id => `    - "${id}"`).join('\n')}`
+      : `telegram:\n  notify_chat_ids:\n    - "YOUR_CHAT_ID"`
+  await copyText(snippet)
+}
+
+function showToast(msg: string) {
+  copyToast.value = msg
+  setTimeout(() => (copyToast.value = ''), 2500)
+}
+
+// ── Session confirm / reject ────────────────────────────────────────────────
+const actionLoading = ref(false)
+const actionFeedback = ref<{ ok: boolean; message: string } | null>(null)
+
+async function confirmSession(printRequested: boolean) {
+  actionLoading.value = true
+  actionFeedback.value = null
+  const result = await scansStore.confirmSession(printRequested)
+  actionLoading.value = false
+  actionFeedback.value = {
+    ok: result.ok,
+    message: result.ok ? 'Session confirmed ✅' : `Error: ${result.message ?? 'unknown'}`,
+  }
+  setTimeout(() => (actionFeedback.value = null), 4000)
+}
+
+async function rejectSession() {
+  actionLoading.value = true
+  actionFeedback.value = null
+  const result = await scansStore.rejectSession()
+  actionLoading.value = false
+  actionFeedback.value = {
+    ok: result.ok,
+    message: result.ok ? 'Session rejected ❌' : `Error: ${result.message ?? 'unknown'}`,
+  }
+  setTimeout(() => (actionFeedback.value = null), 4000)
+}
+
+// ── Status indicators ───────────────────────────────────────────────────────
 const botStatusClass = computed(() => {
-  if (!scansStore.botStatus) return 'disconnected';
-  return scansStore.botStatus.connected ? 'connected' : 'disconnected';
-});
-
+  if (!scansStore.botStatus) return 'disconnected'
+  return scansStore.botStatus.connected ? 'connected' : 'disconnected'
+})
 const botStatusText = computed(() => {
-  if (!scansStore.botStatus) return 'Unknown';
-  return scansStore.botStatus.connected ? 'Connected' : 'Disconnected';
-});
+  if (!scansStore.botStatus) return 'Unknown'
+  return scansStore.botStatus.connected ? 'Connected' : 'Disconnected'
+})
 
 const sessionStatusClass = computed(() => {
-  if (!scansStore.sessionStatus) return 'disconnected';
-  const state = scansStore.sessionStatus.state;
-  if (state === 'WAIT_CONFIRM') return 'waiting';
-  if (state === 'CONFIRMED' || state === 'REJECTED') return 'connected';
-  return 'disconnected';
-});
-
+  const state = scansStore.sessionStatus?.state
+  if (state === 'WAIT_CONFIRM') return 'waiting'
+  if (state === 'CONFIRMED' || state === 'REJECTED') return 'connected'
+  return 'disconnected'
+})
 const sessionStatusText = computed(() => {
-  if (!scansStore.sessionStatus) return 'Unknown';
-  const state = scansStore.sessionStatus.state;
-  if (state === 'WAIT_CONFIRM') return 'Waiting';
-  if (state === 'CONFIRMED') return 'Confirmed';
-  if (state === 'REJECTED') return 'Rejected';
-  return 'Idle';
-});
+  const state = scansStore.sessionStatus?.state
+  if (state === 'WAIT_CONFIRM') return 'Waiting'
+  if (state === 'CONFIRMED') return 'Confirmed'
+  if (state === 'REJECTED') return 'Rejected'
+  return 'Idle'
+})
 
-// Refresh status
-const refreshStatus = () => {
-  scansStore.fetchBotStatus();
-  scansStore.fetchSessionStatus();
-};
+// ── Refresh ─────────────────────────────────────────────────────────────────
+function refreshAll() {
+  scansStore.fetchBotStatus()
+  scansStore.fetchSessionStatus()
+}
 
-// Open bot config (placeholder for now)
-const openBotConfig = () => {
-  alert('Bot configuration would open here');
-};
-
-// Set up periodic updates
 onMounted(() => {
-  // Fetch initial status
-  refreshStatus();
-
-  // Set up periodic updates
-  statusTimer.value = setInterval(() => {
-    refreshStatus();
-  }, STATUS_REFRESH_INTERVAL);
-});
-
+  refreshAll()
+  statusTimer.value = setInterval(refreshAll, STATUS_REFRESH_INTERVAL)
+})
 onBeforeUnmount(() => {
-  if (statusTimer.value) {
-    clearInterval(statusTimer.value);
-  }
-});
+  if (statusTimer.value) clearInterval(statusTimer.value)
+})
 </script>

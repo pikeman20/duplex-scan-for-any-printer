@@ -24,6 +24,7 @@ class TelegramConfig:
     enabled: bool = False
     bot_token: str = ""
     authorized_users: List[str] = field(default_factory=list)
+    notify_chat_ids: List[str] = field(default_factory=list)  # pre-configured chat IDs to always notify
     confirm_timeout_seconds: int = 300  # 5 minutes
     notify_on_session_ready: bool = True
 
@@ -79,6 +80,7 @@ class Config:
                 enabled=bool(telegram_raw.get("enabled", False)) if telegram_raw else False,
                 bot_token=str(telegram_raw.get("bot_token", "")) if telegram_raw else "",
                 authorized_users=list(telegram_raw.get("authorized_users", [])) if telegram_raw else [],
+                notify_chat_ids=list(telegram_raw.get("notify_chat_ids", [])) if telegram_raw else [],
                 confirm_timeout_seconds=int(telegram_raw.get("confirm_timeout_seconds", 300)) if telegram_raw else 300,
                 notify_on_session_ready=bool(telegram_raw.get("notify_on_session_ready", True)) if telegram_raw else True,
             ),
