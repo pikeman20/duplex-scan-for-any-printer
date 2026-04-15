@@ -67,8 +67,8 @@ def start_ftp_server(
     handler = ScannerFTPHandler
     handler.authorizer = authorizer
     
-    # Passive ports (for PASV mode)
-    handler.passive_ports = range(30000, 30010)
+    # Passive ports (for PASV mode) — 3 ports is enough for home use
+    handler.passive_ports = range(30000, 30003)
     
     # Banner
     handler.banner = "Scan Agent FTP Server ready"

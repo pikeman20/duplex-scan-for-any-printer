@@ -107,7 +107,7 @@ def main():
 
     # FTP server (optional)
     if not args.no_ftp:
-        ftp_cmd = [sys.executable, "start_ftp_server.py"]
+        ftp_cmd = [sys.executable, "-m", "src.agent.ftp_server"]
         name, proc, pipe = spawn_child("ftp", ftp_cmd)
         children.append((name, proc, pipe))
         if pipe:

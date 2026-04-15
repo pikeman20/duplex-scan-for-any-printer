@@ -81,7 +81,7 @@ def stream_child_output(name: str, stream, log_file=None):
 
 def validate_prerequisites():
     """Check required service files exist."""
-    required = [Path("src/main.py"), Path("start_ftp_server.py"), Path("src/web_ui_server.py")]
+    required = [Path("src/main.py"), Path("src/agent/ftp_server.py"), Path("src/web_ui_server.py")]
     missing = [str(p) for p in required if not p.exists()]
     if missing:
         print(f"ERROR: Missing required files: {', '.join(missing)}")
