@@ -191,3 +191,4 @@ plans/*
 
 # Runtime config generated from options.example.json
 test_data/options.json
+config.local.yaml

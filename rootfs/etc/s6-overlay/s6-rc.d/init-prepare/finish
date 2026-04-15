@@ -1,0 +1,2 @@
+#!/usr/bin/execlineb -S0
+s6-echo "[finish] init-prepare done"

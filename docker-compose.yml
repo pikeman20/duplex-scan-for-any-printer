@@ -13,9 +13,10 @@ services:
     
     # Environment variables
     environment:
-      # Paths
-      - SCAN_INBOX_BASE=/scan_inbox
-      - SCAN_OUTPUT_DIR=/scan_out
+      # Paths (mirroring HAOS /share/* layout)
+      - SCAN_INBOX_BASE=/share/scan_inbox
+      - SCAN_INBOX_DIR=/share/scan_inbox
+      - SCAN_OUTPUT_DIR=/share/scan_out
       
       # Python settings
       - PYTHONUNBUFFERED=1
@@ -26,25 +27,25 @@ services:
     
     # Volume mounts
     volumes:
-      # Inbox directory for scanned files (FTP upload target)
-      - ./scan_inbox:/scan_inbox
+      # Mirror HAOS share path so code paths match exactly
+      - ./scan_inbox:/share/scan_inbox
       
       # Output directory for generated PDFs
-      - ./scan_out:/scan_out
+      - ./scan_out:/share/scan_out
       
-      # Configuration (optional override)
-      - ./config.yaml:/app/config.yaml:ro
+      # Config is generated at runtime from options.json in HAOS.
+      # For local Docker testing, mount test_data/options.json as /data/options.json
+      # and let 00-prepare.sh generate /data/config.yaml — OR mount config directly:
+      - ./config.local.yaml:/data/config.yaml:ro
       
       # Model checkpoints (required, large files)
       - ./checkpoints:/app/checkpoints:ro
-      
-      # Optional: Logs persistence (if needed for debugging)
-      # - ./logs:/app/logs
     
     # Network ports
     ports:
-      # FTP server port (if using built-in FTP)
-      - "2121:2121"
+      - "2121:2121"        # FTP control
+      - "8099:8099"        # Web UI dashboard
+      - "30000-30009:30000-30009"  # FTP passive
     
     # Network mode for CUPS printer access
     # Use 'host' if you need to access local network printers
@@ -62,7 +63,7 @@ services:
     
     # Health check
     healthcheck:
-      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/scan_inbox') else 1)"]
+      test: ["CMD", "python3", "-c", "import os; exit(0 if os.path.exists('/share/scan_inbox') else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3

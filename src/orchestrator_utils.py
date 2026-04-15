@@ -230,7 +230,7 @@ def detect_environment() -> str:
 
 def create_default_config() -> str:
     """Create minimal default config if none exists."""
-    config_path = Path("config.yaml")
+    config_path = Path("config.local.yaml")
     if config_path.exists():
         return str(config_path)
 

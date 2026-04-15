@@ -1,7 +1,7 @@
 #!/usr/bin/with-contenv bashio
 # ==============================================================================
 # Start Scan Agent
-# Config is at /data/config.yaml — generated from HA options by 00-prepare.sh
+# Config is at /data/config.yaml — generated from HA options by init-prepare
 # Exposes internal API on 127.0.0.1:8098
 # Auto-restarts if crashes
 # ==============================================================================

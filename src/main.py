@@ -949,7 +949,7 @@ class ScanAgent:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="config.yaml")
+    ap.add_argument("--config", default="config.local.yaml")
     args = ap.parse_args()
     
     # Initialize logger first

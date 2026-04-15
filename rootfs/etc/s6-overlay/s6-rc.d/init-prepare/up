@@ -39,8 +39,6 @@ if [ ! -f "/data/checkpoints/depth_anything_v2_vits_slim.onnx" ]; then
 fi
 
 # ── Generate /data/config.yaml ───────────────────────────────────────────────
-# bashio::config for arrays returns a JSON array (e.g. ["123","456"]) which is
-# valid YAML inline sequence syntax — no conversion needed.
 bashio::log.info "Generating /data/config.yaml..."
 cat > /data/config.yaml << EOF
 # Auto-generated from Home Assistant addon options — DO NOT EDIT MANUALLY
@@ -79,18 +77,13 @@ EOF
 bashio::log.info "/data/config.yaml written."
 
 # ── Propagate settings to S6 container environment for service scripts ───────
-# Paths — consumed by Config.load() (SCAN_INBOX_BASE / SCAN_OUTPUT_DIR)
-# and web_ui_server.py (SCAN_INBOX_DIR / SCAN_OUTPUT_DIR)
-printf '%s' "/share/scan_inbox" > /var/run/s6/container_environment/SCAN_INBOX_BASE
-printf '%s' "/share/scan_inbox" > /var/run/s6/container_environment/SCAN_INBOX_DIR
-printf '%s' "/share/scan_out"   > /var/run/s6/container_environment/SCAN_OUTPUT_DIR
-# FTP credentials (read by ftp-server service)
-printf '%s' "${FTP_USERNAME}"   > /var/run/s6/container_environment/FTP_USERNAME
-printf '%s' "${FTP_PASSWORD}"   > /var/run/s6/container_environment/FTP_PASSWORD
-# Telegram bot token override (Config.load() reads SCAN_TELEGRAM_BOT_TOKEN)
-printf '%s' "${TG_TOKEN}"       > /var/run/s6/container_environment/SCAN_TELEGRAM_BOT_TOKEN
-# Python output unbuffered so logs appear immediately in HA log viewer
-printf '%s' "1"                 > /var/run/s6/container_environment/PYTHONUNBUFFERED
+printf '%s' "/share/scan_inbox" > /run/s6/container_environment/SCAN_INBOX_BASE
+printf '%s' "/share/scan_inbox" > /run/s6/container_environment/SCAN_INBOX_DIR
+printf '%s' "/share/scan_out"   > /run/s6/container_environment/SCAN_OUTPUT_DIR
+printf '%s' "${FTP_USERNAME}"   > /run/s6/container_environment/FTP_USERNAME
+printf '%s' "${FTP_PASSWORD}"   > /run/s6/container_environment/FTP_PASSWORD
+printf '%s' "${TG_TOKEN}"       > /run/s6/container_environment/SCAN_TELEGRAM_BOT_TOKEN
+printf '%s' "1"                 > /run/s6/container_environment/PYTHONUNBUFFERED
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 bashio::log.info "Session timeout:  ${SESSION_TIMEOUT}s"
@@ -98,4 +91,3 @@ bashio::log.info "Printer enabled:  ${PRINTER_ENABLED}"
 bashio::log.info "Telegram enabled: ${TG_ENABLED}"
 bashio::log.info "Test mode:        ${TEST_MODE}"
 bashio::log.info "Preparation complete. Starting services..."
-zxc

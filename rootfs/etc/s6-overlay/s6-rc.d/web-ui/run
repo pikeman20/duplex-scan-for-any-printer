@@ -8,7 +8,4 @@ bashio::log.info "Starting Web UI on port 8099..."
 
 cd /app
 
-# Give the scan agent a moment to bind its internal API port
-sleep 5
-
 exec python3 -m src.web_ui_server

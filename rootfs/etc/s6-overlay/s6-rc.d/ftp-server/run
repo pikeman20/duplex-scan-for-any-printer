@@ -1,7 +1,7 @@
 #!/usr/bin/with-contenv bashio
 # ==============================================================================
 # Start FTP Server
-# Credentials loaded from S6 container environment (set by 00-prepare.sh)
+# Credentials loaded from S6 container environment (set by init-prepare)
 # Auto-restarts if crashes
 # ==============================================================================
 

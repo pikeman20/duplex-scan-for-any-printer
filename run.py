@@ -66,13 +66,13 @@ def main():
     _enable_ansi_windows()
 
     # Auto-config
-    config_path = args.config or "config.yaml"
+    config_path = args.config or "config.local.yaml"
     if not Path(config_path).exists():
         config_path = create_default_config()
     create_default_directories(config_path)
 
     if args.setup:
-        print("\nSetup complete! Edit config.yaml, then run: python run.py")
+        print("\nSetup complete! Edit config.local.yaml, then run: python run.py")
         return
 
     if args.install_service:
