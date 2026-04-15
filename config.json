@@ -9,10 +9,12 @@
   "init": false,
   "ports": {
     "2121/tcp": 2121,
+    "8099/tcp": 8099,
     "30000-30009/tcp": null
   },
   "ports_description": {
     "2121/tcp": "FTP control port for scanner uploads",
+    "8099/tcp": "Web UI dashboard",
     "30000-30009/tcp": "FTP passive mode data ports"
   },
   "map": [
@@ -21,79 +23,47 @@
   ],
   "options": {
     "log_level": "info",
+    "session_timeout_seconds": 300,
+    "delete_inbox_files_after_process": true,
+    "test_mode": false,
     "ftp": {
       "username": "",
       "password": ""
-    },
-    "scan_modes": {
-      "scan_duplex": {
-        "enabled": true,
-        "auto_print": false,
-        "duplex": true
-      },
-      "scan_document": {
-        "enabled": true,
-        "auto_print": false
-      },
-      "copy_duplex": {
-        "enabled": true,
-        "auto_print": true,
-        "duplex": true
-      },
-      "card_2in1": {
-        "enabled": true,
-        "auto_print": false
-      }
     },
     "printer": {
       "name": "",
       "ip": "",
       "enabled": false
     },
-    "image_processing": {
-      "enable_background_removal": true,
-      "enable_depth_anything": true,
-      "max_workers": 2
-    },
-    "retention_days": 7
+    "telegram": {
+      "enabled": false,
+      "bot_token": "",
+      "authorized_users": [],
+      "notify_chat_ids": [],
+      "notify_on_session_ready": true
+    }
   },
   "schema": {
     "log_level": "list(trace|debug|info|warning|error)?",
+    "session_timeout_seconds": "int(30,3600)?",
+    "delete_inbox_files_after_process": "bool?",
+    "test_mode": "bool?",
     "ftp": {
       "username": "str?",
       "password": "password?"
-    },
-    "scan_modes": {
-      "scan_duplex": {
-        "enabled": "bool",
-        "auto_print": "bool",
-        "duplex": "bool"
-      },
-      "scan_document": {
-        "enabled": "bool",
-        "auto_print": "bool"
-      },
-      "copy_duplex": {
-        "enabled": "bool",
-        "auto_print": "bool",
-        "duplex": "bool"
-      },
-      "card_2in1": {
-        "enabled": "bool",
-        "auto_print": "bool"
-      }
     },
     "printer": {
       "name": "str?",
       "ip": "str?",
       "enabled": "bool"
     },
-    "image_processing": {
-      "enable_background_removal": "bool",
-      "enable_depth_anything": "bool",
-      "max_workers": "int(1,8)"
-    },
-    "retention_days": "int(1,30)"
+    "telegram": {
+      "enabled": "bool",
+      "bot_token": "password?",
+      "authorized_users": ["str?"],
+      "notify_chat_ids": ["str?"],
+      "notify_on_session_ready": "bool?"
+    }
   },
   "image": "ghcr.io/yourusername/hassio-scan-agent-{arch}",
   "url": "https://github.com/yourusername/hassio-scan-agent",

@@ -46,7 +46,7 @@ def test_telegram_config_env_override():
         "inbox_base": "/test",
         "subdirs": {},
         "output_dir": "/test",
-        "session_timeout_seconds": 120,
+        "session_timeout_seconds": 300,
         "a4_page": {"width_pt": 595, "height_pt": 842},
         "margin_pt": 10,
         "gutter_pt": 18,

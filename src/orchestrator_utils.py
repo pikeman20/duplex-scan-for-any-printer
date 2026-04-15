@@ -249,7 +249,7 @@ def create_default_config() -> str:
         "  test_print: test_print\n"
         "\n"
         "output_dir: ./scan_out\n"
-        "session_timeout_seconds: 120\n"
+        "session_timeout_seconds: 300\n"
         "delete_inbox_files_after_process: true\n"
         "test_mode: true\n"
         "\n"

@@ -1,17 +1,13 @@
-#!/usr/bin/with-contenv bash
+#!/usr/bin/with-contenv bashio
 # ==============================================================================
 # Start Scan Agent
+# Config is at /data/config.yaml — generated from HA options by 00-prepare.sh
+# Exposes internal API on 127.0.0.1:8098
 # Auto-restarts if crashes
 # ==============================================================================
 
-echo "[INFO] Starting Scan Agent service..."
+bashio::log.info "Starting Scan Agent..."
 
 cd /app
 
-# Wait for FTP server to be ready
-sleep 3
-
-echo "[INFO] Scan Agent ready to process files"
-
-# Run scan agent (S6 will restart if it crashes)
 exec python3 -m src.main --config /data/config.yaml

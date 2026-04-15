@@ -33,7 +33,7 @@ class Config:
     inbox_base: str
     subdirs: Dict[str, str]
     output_dir: str
-    session_timeout_seconds: int = 120
+    session_timeout_seconds: int = 300
     a4_page: A4Page = field(default_factory=A4Page)
     printer: PrinterConfig = field(default_factory=PrinterConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
@@ -65,7 +65,7 @@ class Config:
                 },
             ),
             output_dir=raw.get("output_dir", "/scan_out"),
-            session_timeout_seconds=int(raw.get("session_timeout_seconds", 120)),
+            session_timeout_seconds=int(raw.get("session_timeout_seconds", 300)),
             a4_page=A4Page(
                 width_pt=int(a4.get("width_pt", 595)),
                 height_pt=int(a4.get("height_pt", 842)),

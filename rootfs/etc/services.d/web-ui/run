@@ -1,0 +1,14 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Start Web UI Server
+# Serves the dashboard on port 8099; proxies /api/* to agent API on 8098
+# ==============================================================================
+
+bashio::log.info "Starting Web UI on port 8099..."
+
+cd /app
+
+# Give the scan agent a moment to bind its internal API port
+sleep 5
+
+exec python3 -m src.web_ui_server

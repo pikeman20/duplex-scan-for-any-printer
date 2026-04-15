@@ -94,13 +94,16 @@ def start_ftp_server(
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s | %(levelname)s | %(message)s'
+        format="%(asctime)s | FTP | %(levelname)s | %(message)s"
     )
-    
-    # Test server
+    # Read credentials from environment (set by 00-prepare.sh in HAOS)
+    _username = os.environ.get("FTP_USERNAME") or None
+    _password = os.environ.get("FTP_PASSWORD") or None
+    _directory = os.environ.get("FTP_DIRECTORY", "/share/scan_inbox")
     start_ftp_server(
+        host="0.0.0.0",
         port=2121,
-        directory="./scan_inbox",
-        username=None,  # Anonymous
-        password=None
+        directory=_directory,
+        username=_username,
+        password=_password,
     )

@@ -2,41 +2,28 @@
   "_comment": "This is a template file for local Docker testing only.",
   "_comment2": "In HAOS, Supervisor generates /data/options.json from config.json schema + user input.",
   "_comment3": "Copy this file to options.json and customize for your test environment.",
-  
+
   "log_level": "info",
+  "session_timeout_seconds": 300,
+  "delete_inbox_files_after_process": true,
+  "test_mode": false,
+
   "ftp": {
     "username": "",
     "password": ""
   },
-  "scan_modes": {
-    "scan_duplex": {
-      "enabled": true,
-      "auto_print": false,
-      "duplex": true
-    },
-    "scan_document": {
-      "enabled": true,
-      "auto_print": false
-    },
-    "copy_duplex": {
-      "enabled": true,
-      "auto_print": false,
-      "duplex": true
-    },
-    "card_2in1": {
-      "enabled": true,
-      "auto_print": false
-    }
-  },
+
   "printer": {
     "name": "",
     "ip": "192.168.100.60",
-    "enabled": true
+    "enabled": false
   },
-  "image_processing": {
-    "enable_background_removal": true,
-    "enable_depth_anything": true,
-    "max_workers": 2
-  },
-  "retention_days": 7
+
+  "telegram": {
+    "enabled": false,
+    "bot_token": "",
+    "authorized_users": [],
+    "notify_chat_ids": [],
+    "notify_on_session_ready": true
+  }
 }

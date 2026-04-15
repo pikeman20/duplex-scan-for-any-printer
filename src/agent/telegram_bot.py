@@ -32,7 +32,7 @@ class TelegramBot(NotificationChannel):
     """Telegram bot for handling scan session confirmations."""
 
     config: TelegramConfig
-    session_timeout_seconds: int = 120  # mirrors Config.session_timeout_seconds for display
+    session_timeout_seconds: int = 300  # mirrors Config.session_timeout_seconds for display
     _application: Optional[Application] = field(default=None, repr=False)
     _running: bool = field(default=False, repr=False)
     _polling_loop: Optional[Any] = field(default=None, repr=False)  # event loop running run_polling

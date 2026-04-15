@@ -1,150 +1,101 @@
-#!/usr/bin/with-contenv bash
+#!/usr/bin/with-contenv bashio
 # ==============================================================================
 # Prepare environment and configuration
 # Runs once before services start
+# Uses bashio to read Home Assistant addon options
 # ==============================================================================
 
 set -e
 
-echo "[INFO] Preparing Scan Agent environment..."
+bashio::log.info "Preparing Scan Agent environment..."
 
-# Check if running in HAOS (Supervisor available) or standalone
-if [ -f "/data/options.json" ]; then
-    CONFIG_FILE="/data/options.json"
-    echo "[INFO] Using configuration from: ${CONFIG_FILE}"
-else
-    echo "[ERROR] Configuration file not found!"
-    exit 1
-fi
+# ── Read options via bashio ──────────────────────────────────────────────────
+SESSION_TIMEOUT=$(bashio::config 'session_timeout_seconds' '300')
+DELETE_INBOX=$(bashio::config 'delete_inbox_files_after_process' 'true')
+TEST_MODE=$(bashio::config 'test_mode' 'false')
+PRINTER_ENABLED=$(bashio::config 'printer.enabled' 'false')
+PRINTER_NAME=$(bashio::config 'printer.name' '')
+PRINTER_IP=$(bashio::config 'printer.ip' '')
+FTP_USERNAME=$(bashio::config 'ftp.username' '')
+FTP_PASSWORD=$(bashio::config 'ftp.password' '')
+TG_ENABLED=$(bashio::config 'telegram.enabled' 'false')
+TG_TOKEN=$(bashio::config 'telegram.bot_token' '')
+TG_AUTH=$(bashio::config 'telegram.authorized_users' '[]')
+TG_NOTIFY=$(bashio::config 'telegram.notify_chat_ids' '[]')
+TG_NOTIFY_ON_READY=$(bashio::config 'telegram.notify_on_session_ready' 'true')
 
-# Parse configuration using jq
-LOG_LEVEL=$(jq -r '.log_level // "INFO"' ${CONFIG_FILE})
-RETENTION_DAYS=$(jq -r '.retention_days // "7"' ${CONFIG_FILE})
-PRINTER_NAME=$(jq -r '.printer.name // ""' ${CONFIG_FILE})
-PRINTER_IP=$(jq -r '.printer.ip // ""' ${CONFIG_FILE})
-PRINTER_ENABLED=$(jq -r '.printer.enabled // "false"' ${CONFIG_FILE})
-FTP_PORT=$(jq -r '.ftp.port // "2121"' ${CONFIG_FILE})
-FTP_USERNAME=$(jq -r '.ftp.username // "anonymous"' ${CONFIG_FILE})
-FTP_PASSWORD=$(jq -r '.ftp.password // ""' ${CONFIG_FILE})
+bashio::log.info "Log level: $(bashio::config 'log_level' 'info')"
 
-# Set log level
-export LOG_LEVEL="${LOG_LEVEL^^}"
-echo "[INFO] Log level set to: ${LOG_LEVEL}"
-
-# Create directories
-echo "[INFO] Setting up directories..."
+# ── Create directories ───────────────────────────────────────────────────────
+bashio::log.info "Setting up directories..."
 mkdir -p /share/scan_inbox/{scan_duplex,copy_duplex,scan_document,card_2in1,confirm,confirm_print,reject,test_print}
 mkdir -p /share/scan_out
 mkdir -p /data/checkpoints
 
-# Copy checkpoints if not exist
+# Copy checkpoint models to persistent storage on first run
 if [ ! -f "/data/checkpoints/depth_anything_v2_vits_slim.onnx" ]; then
-    echo "[INFO] Copying checkpoint models to /data..."
+    bashio::log.info "Copying checkpoint models to /data/checkpoints..."
     cp -r /app/checkpoints/* /data/checkpoints/
 fi
 
-# Generate config.yaml from options.json
-echo "[INFO] Generating configuration..."
+# ── Generate /data/config.yaml ───────────────────────────────────────────────
+# bashio::config for arrays returns a JSON array (e.g. ["123","456"]) which is
+# valid YAML inline sequence syntax — no conversion needed.
+bashio::log.info "Generating /data/config.yaml..."
 cat > /data/config.yaml << EOF
-# Auto-generated from Home Assistant addon options
-scan_inbox_base: /share/scan_inbox
-scan_output_dir: /share/scan_out
-checkpoint_dir: /data/checkpoints
-retention_days: ${RETENTION_DAYS}
+# Auto-generated from Home Assistant addon options — DO NOT EDIT MANUALLY
+inbox_base: /share/scan_inbox
+subdirs:
+  scan_duplex: scan_duplex
+  copy_duplex: copy_duplex
+  scan_document: scan_document
+  card_2in1: card_2in1
+  confirm: confirm
+  confirm_print: confirm_print
+  reject: reject
+  test_print: test_print
+output_dir: /share/scan_out
+session_timeout_seconds: ${SESSION_TIMEOUT}
+a4_page:
+  width_pt: 595
+  height_pt: 842
+margin_pt: 15
+delete_inbox_files_after_process: ${DELETE_INBOX}
+test_mode: ${TEST_MODE}
 
-scan_modes:
-  scan_duplex:
-    enabled: $(jq -r '.scan_modes.scan_duplex.enabled // "true"' ${CONFIG_FILE})
-    auto_print: $(jq -r '.scan_modes.scan_duplex.auto_print // "false"' ${CONFIG_FILE})
-    duplex: $(jq -r '.scan_modes.scan_duplex.duplex // "true"' ${CONFIG_FILE})
-    
-  scan_document:
-    enabled: $(jq -r '.scan_modes.scan_document.enabled // "true"' ${CONFIG_FILE})
-    auto_print: $(jq -r '.scan_modes.scan_document.auto_print // "false"' ${CONFIG_FILE})
-    
-  copy_duplex:
-    enabled: $(jq -r '.scan_modes.copy_duplex.enabled // "true"' ${CONFIG_FILE})
-    auto_print: $(jq -r '.scan_modes.copy_duplex.auto_print // "false"' ${CONFIG_FILE})
-    duplex: $(jq -r '.scan_modes.copy_duplex.duplex // "true"' ${CONFIG_FILE})
-    
-  card_2in1:
-    enabled: $(jq -r '.scan_modes.card_2in1.enabled // "true"' ${CONFIG_FILE})
-    auto_print: $(jq -r '.scan_modes.card_2in1.auto_print // "false"' ${CONFIG_FILE})
-
-image_processing:
-  enable_background_removal: $(jq -r '.image_processing.enable_background_removal // "true"' ${CONFIG_FILE})
-  enable_depth_anything: $(jq -r '.image_processing.enable_depth_anything // "true"' ${CONFIG_FILE})
-  max_workers: $(jq -r '.image_processing.max_workers // "4"' ${CONFIG_FILE})
-
-EOF
-
-# Printer configuration
-if [ "${PRINTER_ENABLED}" = "true" ]; then
-    if [ -n "${PRINTER_IP}" ]; then
-        echo "[INFO] Printer enabled (network): ${PRINTER_IP}"
-    elif [ -n "${PRINTER_NAME}" ]; then
-        echo "[INFO] Printer enabled: ${PRINTER_NAME}"
-    else
-        echo "[INFO] Printer enabled: default"
-    fi
-    cat >> /data/config.yaml << EOF
 printer:
-  name: ${PRINTER_NAME}
-  ip: ${PRINTER_IP}
-  enabled: true
-EOF
-else
-    echo "[INFO] Printer disabled"
-    cat >> /data/config.yaml << EOF
-printer:
-  enabled: false
-EOF
-fi
+  enabled: ${PRINTER_ENABLED}
+  name: "${PRINTER_NAME}"
+  ip: "${PRINTER_IP}"
 
-# Create FTP environment file for service
-cat > /var/run/s6/container_environment/FTP_PORT << EOF
-${FTP_PORT}
+telegram:
+  enabled: ${TG_ENABLED}
+  bot_token: "${TG_TOKEN}"
+  authorized_users: ${TG_AUTH}
+  notify_chat_ids: ${TG_NOTIFY}
+  notify_on_session_ready: ${TG_NOTIFY_ON_READY}
 EOF
 
-cat > /var/run/s6/container_environment/FTP_USERNAME << EOF
-${FTP_USERNAME}
-EOF
+bashio::log.info "/data/config.yaml written."
 
-cat > /var/run/s6/container_environment/FTP_PASSWORD << EOF
-${FTP_PASSWORD}
-EOF
+# ── Propagate settings to S6 container environment for service scripts ───────
+# Paths — consumed by Config.load() (SCAN_INBOX_BASE / SCAN_OUTPUT_DIR)
+# and web_ui_server.py (SCAN_INBOX_DIR / SCAN_OUTPUT_DIR)
+printf '%s' "/share/scan_inbox" > /var/run/s6/container_environment/SCAN_INBOX_BASE
+printf '%s' "/share/scan_inbox" > /var/run/s6/container_environment/SCAN_INBOX_DIR
+printf '%s' "/share/scan_out"   > /var/run/s6/container_environment/SCAN_OUTPUT_DIR
+# FTP credentials (read by ftp-server service)
+printf '%s' "${FTP_USERNAME}"   > /var/run/s6/container_environment/FTP_USERNAME
+printf '%s' "${FTP_PASSWORD}"   > /var/run/s6/container_environment/FTP_PASSWORD
+# Telegram bot token override (Config.load() reads SCAN_TELEGRAM_BOT_TOKEN)
+printf '%s' "${TG_TOKEN}"       > /var/run/s6/container_environment/SCAN_TELEGRAM_BOT_TOKEN
+# Python output unbuffered so logs appear immediately in HA log viewer
+printf '%s' "1"                 > /var/run/s6/container_environment/PYTHONUNBUFFERED
 
-# Set environment variables
-echo "/share/scan_inbox" > /var/run/s6/container_environment/SCAN_INBOX_BASE
-echo "/share/scan_out" > /var/run/s6/container_environment/SCAN_OUTPUT_DIR
-echo "1" > /var/run/s6/container_environment/PYTHONUNBUFFERED
-
-# Display configuration info
-echo "[INFO] Configuration:"
-echo "[INFO]   Scan inbox: /share/scan_inbox"
-echo "[INFO]   Scan output: /share/scan_out"
-echo "[INFO]   Checkpoints: /data/checkpoints"
-echo "[INFO]   Retention: ${RETENTION_DAYS} days"
-echo "[INFO]   FTP Port: ${FTP_PORT}"
-if [ -n "$FTP_USERNAME" ] && [ "$FTP_USERNAME" != "anonymous" ]; then
-    echo "[INFO]   FTP User: ${FTP_USERNAME} (authenticated)"
-else
-    echo "[INFO]   FTP User: anonymous (no auth required)"
-fi
-
-# Check CUPS if printer enabled
-if [ "${PRINTER_ENABLED}" = "true" ]; then
-    if ! command -v lpstat &> /dev/null; then
-        echo "[WARN] CUPS not available. Printing features will be disabled."
-    else
-        if [ -n "${PRINTER_IP}" ]; then
-            echo "[INFO] CUPS available. Network printer: ${PRINTER_IP}"
-        elif [ -n "${PRINTER_NAME}" ]; then
-            echo "[INFO] CUPS available. Printer: ${PRINTER_NAME}"
-        else
-            echo "[INFO] CUPS available. Using default printer"
-        fi
-    fi
-fi
-
-echo "[INFO] Preparation complete. Starting services..."
+# ── Summary ──────────────────────────────────────────────────────────────────
+bashio::log.info "Session timeout:  ${SESSION_TIMEOUT}s"
+bashio::log.info "Printer enabled:  ${PRINTER_ENABLED}"
+bashio::log.info "Telegram enabled: ${TG_ENABLED}"
+bashio::log.info "Test mode:        ${TEST_MODE}"
+bashio::log.info "Preparation complete. Starting services..."
+zxc

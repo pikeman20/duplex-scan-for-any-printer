@@ -1,42 +1,12 @@
-#!/usr/bin/with-contenv bash
+#!/usr/bin/with-contenv bashio
 # ==============================================================================
 # Start FTP Server
+# Credentials loaded from S6 container environment (set by 00-prepare.sh)
 # Auto-restarts if crashes
 # ==============================================================================
 
-echo "[INFO] Starting FTP server service..."
+bashio::log.info "Starting FTP server on port 2121..."
 
 cd /app
 
-# Create FTP startup script
-cat > /tmp/start_ftp.py << 'FTPEOF'
-from agent.ftp_server import start_ftp_server
-import logging
-import os
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | FTP | %(levelname)s | %(message)s'
-)
-
-username = os.environ.get('FTP_USERNAME')
-password = os.environ.get('FTP_PASSWORD')
-port = int(os.environ.get('FTP_PORT', '2121'))
-
-logging.info(f"FTP server starting on port {port}")
-if username:
-    logging.info(f"Authentication: username={username}")
-else:
-    logging.info("Authentication: anonymous (no credentials required)")
-
-start_ftp_server(
-    host='0.0.0.0',
-    port=port,
-    directory='/share/scan_inbox',
-    username=username if username else None,
-    password=password if password else None
-)
-FTPEOF
-
-# Run FTP server (S6 will restart if it crashes)
-exec python3 /tmp/start_ftp.py
+exec python3 -m src.agent.ftp_server
