@@ -1,4 +1,4 @@
-#!/usr/bin/with-contenv bashio
+#!/usr/bin/with-contenv bash
 # ==============================================================================
 # Start Scan Agent
 # Config is at /data/config.yaml — generated from HA options by init-prepare
@@ -6,7 +6,11 @@
 # Auto-restarts if crashes
 # ==============================================================================
 
-bashio::log.info "Starting Scan Agent..."
+if command -v bashio &>/dev/null; then
+    bashio::log.info "Starting Scan Agent..."
+else
+    echo "[scan-agent] Starting Scan Agent..."
+fi
 
 cd /app
 

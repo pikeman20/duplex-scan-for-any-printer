@@ -22,11 +22,10 @@ RUN \
         libcupsimage2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Brother printer drivers
+# Copy and install Brother printer drivers (all .deb files, sorted — LPR before wrapper)
 COPY drivers/*.deb /tmp/drivers/
 RUN \
-    dpkg -i /tmp/drivers/mfc7860dwlpr-2.1.0-1.i386.deb || true \
-    && dpkg -i /tmp/drivers/cupswrapperMFC7860DW-2.0.4-2.i386.deb || true \
+    for deb in $(ls /tmp/drivers/*.deb | sort); do dpkg -i "$deb" || true; done \
     && apt-get update && apt-get install -f -y \
     && rm -rf /tmp/drivers /var/lib/apt/lists/*
 
@@ -45,6 +44,8 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /
 
+# Bust cache for rootfs on every build so script changes are always picked up
+ARG CACHE_BUST=1
 COPY rootfs /
 
 RUN chmod -R a+x /etc/s6-overlay/s6-rc.d

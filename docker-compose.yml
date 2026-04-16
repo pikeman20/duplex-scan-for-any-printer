@@ -2,109 +2,23 @@ version: '3.8'
 
 services:
   scan-agent:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: scan-agent:latest
+    build: .
     container_name: scan-agent
-    
-    # Restart policy
-    restart: unless-stopped
-    
-    # Environment variables
-    environment:
-      # Paths (mirroring HAOS /share/* layout)
-      - SCAN_INBOX_BASE=/share/scan_inbox
-      - SCAN_INBOX_DIR=/share/scan_inbox
-      - SCAN_OUTPUT_DIR=/share/scan_out
-      
-      # Python settings
-      - PYTHONUNBUFFERED=1
-      - PYTHONPATH=/app
-      
-      # Optional: Set log level
-      - LOG_LEVEL=INFO
-    
-    # Volume mounts
+    ports:
+      - "2121:2121"  # FTP server
+      - "8099:8099"  # Web UI
     volumes:
-      # Mirror HAOS share path so code paths match exactly
       - ./scan_inbox:/share/scan_inbox
-      
-      # Output directory for generated PDFs
       - ./scan_out:/share/scan_out
-      
-      # Config is generated at runtime from options.json in HAOS.
-      # For local Docker testing, mount test_data/options.json as /data/options.json
-      # and let 00-prepare.sh generate /data/config.yaml — OR mount config directly:
-      - ./config.local.yaml:/data/config.yaml:ro
-      
-      # Model checkpoints (required, large files)
-      - ./checkpoints:/app/checkpoints:ro
-    
-    # Network ports
-    ports:
-      - "2121:2121"        # FTP control
-      - "8099:8099"        # Web UI dashboard
-      - "30000-30009:30000-30009"  # FTP passive
-    
-    # Network mode for CUPS printer access
-    # Use 'host' if you need to access local network printers
-    # network_mode: host
-    
-    # Resource limits (adjust for Raspberry Pi)
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
-    
-    # Health check
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import os; exit(0 if os.path.exists('/share/scan_inbox') else 1)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    
-    # Logging configuration
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # Optional: FTP server (if not using built-in)
-  ftp-server:
-    image: stilliard/pure-ftpd
-    container_name: scan-ftp
-    restart: unless-stopped
-    
-    ports:
-      - "21:21"
-      - "30000-30009:30000-30009"
-    
-    volumes:
-      - ./scan_inbox:/home/ftpuser/scan_inbox
-    
+      - ./checkpoints:/app/checkpoints
     environment:
-      - PUBLICHOST=localhost
-      - FTP_USER_NAME=scanuser
-      - FTP_USER_PASS=scanpass
-      - FTP_USER_HOME=/home/ftpuser
-    
-    # Uncomment if you want to use external FTP server
-    # profiles:
-    #   - ftp
+      - SCAN_INBOX_BASE=/share/scan_inbox
+      - SCAN_OUTPUT_DIR=/share/scan_out
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    networks:
+      - scan-net
 
-# Volumes (optional: use named volumes instead of bind mounts)
-# volumes:
-#   scan_inbox:
-#   scan_out:
-
-# Networks (optional: custom network)
-# networks:
-#   scan_network:
-#     driver: bridge
+networks:
+  scan-net:
+    driver: bridge

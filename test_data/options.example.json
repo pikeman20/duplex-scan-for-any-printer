@@ -7,10 +7,24 @@
   "session_timeout_seconds": 300,
   "delete_inbox_files_after_process": true,
   "test_mode": false,
+  "retention_days": 7,
 
   "ftp": {
     "username": "",
     "password": ""
+  },
+
+  "scan_modes": {
+    "scan_duplex":   { "enabled": true,  "auto_print": false, "duplex": true },
+    "scan_document": { "enabled": true,  "auto_print": false },
+    "copy_duplex":   { "enabled": true,  "auto_print": false, "duplex": true },
+    "card_2in1":     { "enabled": true,  "auto_print": false }
+  },
+
+  "image_processing": {
+    "enable_background_removal": true,
+    "enable_depth_anything": true,
+    "max_workers": 2
   },
 
   "printer": {

@@ -1,129 +1,76 @@
 # Quick Start Guide
 
-## Overview
-This guide shows you how to get the PrinterDuplexScanForCheapPrint scan agent up and running quickly with minimal setup.
+## Option 1: Home Assistant Addon (Recommended)
 
-## Option 1: Local Quick Start (Recommended for Testing)
+1. Add the repository to HA Add-on Store
+2. Install **Scan Agent**
+3. Configure FTP credentials and optional printer/Telegram in the addon options
+4. Start the addon — the web dashboard is available in the HA sidebar
+
+Scanner FTP profiles: point each profile to a subfolder on the addon's FTP server (port 2121).
+
+## Option 2: Local Development
 
 ### Step 1: Install Dependencies
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd PrinterDuplexScanForCheapPrint
-
-# Install Python dependencies
 pip install -r requirements.txt
 ```
 
-### Step 2: Run with Defaults
+### Step 2: Create local config
 ```bash
-# Starts scan agent + FTP server (port 2121) + web UI (port 8099)
+cp config.local.template.yaml config.local.yaml
+# Edit config.local.yaml with your local paths
+```
+
+### Step 3: Run
+```bash
+# Start all services (scan agent + FTP server port 2121 + web UI port 8099)
 python run.py
 
 # Windows: Double-click start.bat
 ```
 
-This will automatically:
-1. Create default directories (`scan_inbox/`, `scan_out/`)
-2. Create a default `config.yaml` with safe settings
-3. Start all 3 services
-4. Log all output to `./logs/` directory
+The orchestrator automatically:
+1. Creates default directories (`scan_inbox/`, `scan_out/`) if missing
+2. Starts scan agent, FTP server, and web UI
+3. Logs all output to `./logs/`
+4. Handles graceful shutdown on Ctrl+C
 
-### Step 3: Test with Sample Files
-1. Place any image file in `scan_inbox/scan_duplex/`
-2. The agent will automatically:
-   - Detect the file
-   - Process it (orientation, deskew, background removal if models available)
-   - Generate duplex PDFs in `scan_out/`
-   - Clean up the input file
-
-### Step 4: Stop the Agent
-Press `Ctrl+C` to stop the agent when you're done.
-
-## Option 2: With Embedded FTP Server
-
-If your scanner supports FTP, use the built-in server:
+### Selective Services
 ```bash
-python run.py --no-web  # agent + FTP only
+python run.py --no-ftp       # agent + web UI only
+python run.py --no-web       # agent + FTP only
+python run.py --no-ftp --no-web  # agent only
+python run.py --setup        # create config + dirs, don't start
 ```
 
-Then configure your scanner:
-- **Server**: Your computer's IP address
-- **Port**: 2121
-- **Username**: anonymous
-- **Password**: (leave blank)
-- **Remote Directory**: `/scan_duplex` (or other mode folders)
+## Option 3: Docker (local testing)
 
-## Option 3: Web Interface
-
-Start with the web interface for manual editing:
 ```bash
-python run.py --no-ftp  # agent + web UI only
-```
-
-Then open your browser to: http://localhost:8099
-
-## Option 4: Docker (Recommended for Production)
-
-### Step 1: Start the Service
-```bash
-docker-compose -f docker-compose-simple.yml up -d
-```
-
-### Step 2: Verify It's Running
-```bash
-docker-compose -f docker-compose-simple.yml logs -f scan-agent
-```
-
-### Step 3: Access Web Interface
-Open: http://localhost:8099
-
-## Option 5: Install as Linux Service
-
-For 24/7 operation on a dedicated machine:
-```bash
-sudo python run.py --install-service
-```
-
-Then manage with:
-```bash
-# Check status
-sudo systemctl status scan-agent
-
-# View logs
-sudo journalctl -u scan-agent -f
-
-# Stop service
-sudo systemctl stop scan-agent
-
-# Start service
-sudo systemctl start scan-agent
+docker-compose up -d
+docker-compose logs -f scan-agent
+# Web UI: http://localhost:8099
 ```
 
 ## Folder Structure
-After starting, you'll see:
+
 ```
 scan_inbox/
-├── scan_duplex/      # Place front/back scans here (paired automatically)
+├── scan_duplex/      # Place front/back scans here (auto-paired)
 ├── copy_duplex/      # Scan + auto-print
-├── scan_document/    # Multi-document layout (2x2 grid)
+├── scan_document/    # Multi-document layout (2×2 grid)
 ├── card_2in1/        # ID cards (2 per page)
-├── confirm/          # Files here trigger processing
-├── reject/           # Files here cancel processing
-└── test_print/       # Direct PDF print (no processing)
+├── test_print/       # Direct PDF print (no processing)
+├── confirm/          # Files here trigger session processing
+└── reject/           # Files here cancel session
 
 scan_out/
-├── Generated PDFs go here
-└── Metadata JSON files
+└── Generated PDFs and metadata JSON files
 ```
 
 ## Next Steps
-1. **For better scanning**: Download the required ONNX model files to `./checkpoints/` (see `plans/model-dependencies.md`)
-2. **For printing**: Configure a printer in `config.yaml` or enable it via the web UI
-3. **For production**: Adjust `image_processing.max_workers` based on your CPU
-4. **For troubleshooting**: Check logs - they're detailed and include timing information
 
-## Need Help?
-- Check the logs for detailed error messages
-- See `DEPLOYMENT.md` for advanced installation options
-- Look at `plans/model-dependencies.md` for model requirements
+- **Models**: Download ONNX model files to `./checkpoints/` — see `plans/model-dependencies.md`
+- **Printer**: Configure printer IP in addon options or `config.local.yaml`
+- **Telegram**: Set bot token and chat IDs in addon options for scan notifications
+- **Troubleshooting**: Check `./logs/` for detailed output

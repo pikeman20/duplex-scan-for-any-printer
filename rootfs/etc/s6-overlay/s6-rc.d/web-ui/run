@@ -1,10 +1,14 @@
-#!/usr/bin/with-contenv bashio
+#!/usr/bin/with-contenv bash
 # ==============================================================================
 # Start Web UI Server
 # Serves the dashboard on port 8099; proxies /api/* to agent API on 8098
 # ==============================================================================
 
-bashio::log.info "Starting Web UI on port 8099..."
+if command -v bashio &>/dev/null; then
+    bashio::log.info "Starting Web UI on port 8099..."
+else
+    echo "[web-ui] Starting Web UI on port 8099..."
+fi
 
 cd /app
 

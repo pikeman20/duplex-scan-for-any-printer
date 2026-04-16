@@ -188,6 +188,7 @@ scan_inbox_to_test/*
 scan_out/*
 debug/*
 plans/*
+.claude/
 
 # Runtime config generated from options.example.json
 test_data/options.json

@@ -19,8 +19,10 @@ try {
 # Build image
 Write-Host "`nBuilding Docker image..." -ForegroundColor Yellow
 Write-Host "Note: Using HAOS Debian base with Python 3.10 (ghcr.io/home-assistant/amd64-base-debian:latest)" -ForegroundColor Cyan
+$CacheBust = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 docker build `
     --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian:latest `
+    --build-arg CACHE_BUST=$CacheBust `
     -t scan-agent:test `
     .
 
@@ -48,20 +50,16 @@ New-Item -ItemType Directory -Force -Path "test_data" | Out-Null
 Write-Host "✓ Using existing directories:" -ForegroundColor Green
 Write-Host "  ./scan_inbox  - FTP upload target (existing data preserved)"
 Write-Host "  ./scan_out    - PDF output"
-Write-Host "  ./test_data   - Container data (options.json)"
+Write-Host "  ./test_data   - Container data (config.yaml)"
 
-# Create test options.json from example if not exists
+# Verify config.yaml exists (mounted as /data/config.yaml in container)
 Write-Host "`nPreparing test configuration..." -ForegroundColor Yellow
-if (-not (Test-Path "test_data/options.json")) {
-    if (Test-Path "test_data/options.example.json") {
-        Copy-Item "test_data/options.example.json" "test_data/options.json"
-        Write-Host "✓ Copied options.example.json → options.json" -ForegroundColor Green
-    } else {
-        Write-Host "✗ test_data/options.example.json not found!" -ForegroundColor Red
-        exit 1
-    }
+if (-not (Test-Path "test_data/config.yaml")) {
+    Write-Host "✗ test_data/config.yaml not found!" -ForegroundColor Red
+    Write-Host "  Create it based on config.local.template.yaml or check docs." -ForegroundColor Yellow
+    exit 1
 } else {
-    Write-Host "✓ Using existing test_data/options.json" -ForegroundColor Green
+    Write-Host "✓ Using test_data/config.yaml" -ForegroundColor Green
 }
 
 # Get local IP
@@ -80,7 +78,9 @@ Write-Host ""
 Write-Host "Test FTP connection:" -ForegroundColor White
 Write-Host "  ftp $LocalIP 2121" -ForegroundColor Yellow
 Write-Host ""
-
+Write-Host "Web UI dashboard:" -ForegroundColor White
+Write-Host "  http://${LocalIP}:8099" -ForegroundColor Yellow
+Write-Host ""
 # Run container
 Write-Host "Starting container..." -ForegroundColor Yellow
 Write-Host "Press Ctrl+C to stop" -ForegroundColor White
@@ -88,9 +88,9 @@ Write-Host ""
 
 # Check if Docker Desktop supports host network (Linux containers on Windows use NAT)
 # For printer access, we'll use host network on Linux, or bridge with port mapping on Windows
-$IsLinux = $PSVersionTable.Platform -eq 'Unix'
+$OnLinux = $PSVersionTable.Platform -eq 'Unix'
 
-if ($IsLinux) {
+if ($OnLinux) {
     Write-Host "Using host network mode for direct printer access" -ForegroundColor Cyan
     docker run --rm -it `
         --name scan-agent-test `
@@ -99,6 +99,8 @@ if ($IsLinux) {
         -v "${PWD}/scan_out:/share/scan_out" `
         -v "${PWD}/test_data:/data" `
         -v "${PWD}/checkpoints:/app/checkpoints:ro" `
+        -e SCAN_INBOX_BASE=/share/scan_inbox `
+        -e SCAN_OUTPUT_DIR=/share/scan_out `
         -e LOG_LEVEL=INFO `
         scan-agent:test
 } else {
@@ -114,7 +116,10 @@ if ($IsLinux) {
         -v "${PWD}/test_data:/data" `
         -v "${PWD}/checkpoints:/app/checkpoints:ro" `
         -p 2121:2121 `
-        -p 30000-30009:30000-30009 `
+        -p 8099:8099 `
+        -p 30000-30002:30000-30002 `
+        -e SCAN_INBOX_BASE=/share/scan_inbox `
+        -e SCAN_OUTPUT_DIR=/share/scan_out `
         -e LOG_LEVEL=INFO `
         scan-agent:test
 }

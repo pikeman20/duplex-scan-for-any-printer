@@ -1,154 +1,107 @@
-# PrinterDuplexScanForCheapPrint
+# Scan Agent — Brother Scanner Home Assistant Addon
 
-A lightweight server-side agent to extend Brother MFC-7860DW "Scan to FTP" into predictable duplex scanning, copying, small-document layout, and 2-in-1 card scanning.
+A Home Assistant addon that extends the Brother MFC-7860DW "Scan to FTP" feature into predictable duplex scanning, copying, small-document layout, and 2-in-1 card scanning.
 
 Core philosophy: reflect physical intent; do not guess, beautify, or auto-center.
 
 ## Features
 
-- **Scan duplex** - Pair fronts/backs, interleaved PDF with auto-orientation correction
-- **Copy duplex** - Render PDF, print via CUPS `lp` two-sided
-- **Scan small documents** - Strict 2×2 quadrant layout, respects physical placement
-- **Card/ID 2-in-1** - Pair images per page (left-right or top-bottom)
-- **Session management** - Explicit Confirm/Reject with timeout fallback and mode switching
-- **Fast PDF generation** - PyMuPDF with in-memory buffers (5-20x faster than ReportLab)
+- **Scan duplex** — Pair fronts/backs, interleaved PDF with auto-orientation correction
+- **Copy duplex** — Render PDF, print via CUPS two-sided
+- **Scan small documents** — Strict 2×2 quadrant layout, respects physical placement
+- **Card/ID 2-in-1** — Pair images per page (left-right or top-bottom)
+- **Session management** — Explicit Confirm/Reject with timeout fallback and mode switching
+- **Web dashboard** — Monitor sessions, view scan history, manage settings
+- **Telegram notifications** — Get notified when a session is ready to confirm
 
-## Performance
+## Scan Modes
 
-- **PDF Generation**: PyMuPDF with C++ backend
-  - scan_duplex: ~2-3s for 10 pages
-  - scan_document: ~7s for 32 documents across 13 pages
-  - In-memory processing (no temp files)
-- **Image optimization**: Auto-downscale to 150-200 DPI for print
-- **Background removal**: V2 with withoutbg library for accurate document detection
-
-## Folder Convention
-
-```text
-/scan_inbox/
+```
+/share/scan_inbox/
  ├─ scan_duplex/      # Duplex scanning with auto-orientation
  ├─ copy_duplex/      # Duplex scanning + auto-print
  ├─ scan_document/    # Multi-document layout (2×2 grid)
  ├─ card_2in1/        # ID/card scanning (2 cards per page)
- ├─ test_print/       # 🆕 Quick printer test (direct print)
+ ├─ test_print/       # Quick printer test (direct print, no processing)
  ├─ confirm/          # Confirm session processing
  └─ reject/           # Cancel session
 ```
-Each FTP profile should point to a specific subfolder.
 
-### Test Print Mode
+Each FTP profile on the scanner should point to one of these subfolders.
 
-For quick printer verification, drop any image into `test_print/`:
-- No image processing (direct conversion to PDF)
-- Instant print if printer configured
-- See [PRINTER_TEST.md](PRINTER_TEST.md) for details
+## Installation (Home Assistant)
 
+1. In Home Assistant, go to **Settings → Add-ons → Add-on Store**
+2. Click the three-dot menu → **Repositories** → add your repository URL
+3. Find **Scan Agent** and click **Install**
+4. Configure options (FTP credentials, printer, Telegram)
+5. Start the addon
+
+The addon exposes:
+- **Port 2121** — FTP control (scanner uploads)
+- **Ports 30000–30002** — FTP passive data ports
+- **Ingress** — Web dashboard (accessible from HA sidebar)
+
+## Scanner Configuration (Brother MFC-7860DW)
+
+Set up an FTP profile on the scanner for each scan mode:
+
+| Profile | Remote Path |
+|---------|-------------|
+| Scan Duplex | `/scan_duplex` |
+| Copy Duplex | `/copy_duplex` |
+| Scan Document | `/scan_document` |
+| Card 2-in-1 | `/card_2in1` |
+
+- **Server**: Home Assistant IP address
+- **Port**: 2121
+- **Username/Password**: as configured in addon options (or leave blank for anonymous)
+
+## Local Development
+
+### Requirements
+- Python 3.10+
+- Dependencies: `pip install -r requirements.txt`
+
+### Run locally
 ```bash
-# Quick test via command line
-cp test.jpg /share/scan_inbox/test_print/
-```
+# Copy and edit the local config
+cp config.local.template.yaml config.local.yaml
+# Edit config.local.yaml with your local paths
 
-## Quick Start
-
-### Simple Start (Recommended)
-```bash
 # Start all services (scan agent + FTP server + web UI)
 python run.py
 
-# Windows: Double-click start.bat
-```
+# Start selectively
+python run.py --no-ftp      # agent + web UI only
+python run.py --no-web      # agent + FTP only
+python run.py --no-ftp --no-web  # agent only
 
-The orchestrator automatically:
-- Creates default config and directories if missing
-- Starts scan agent, FTP server (port 2121), and web UI (port 8099)
-- Logs all output to `./logs/` directory
-- Handles graceful shutdown with Ctrl+C
-
-### Selective Services
-```bash
-# Start only the scan agent (no FTP or web UI)
-python run.py --no-ftp --no-web
-
-# Start agent + FTP only (no web UI)
-python run.py --no-web
-
-# Start agent + web UI only (no FTP)
-python run.py --no-ftp
-```
-
-### Setup Only
-```bash
-# Create config and directories without starting services
+# Setup directories only (no services)
 python run.py --setup
 ```
 
-### Docker Start
+### Docker (local testing)
 ```bash
-# Using the simplified Docker configuration
-docker-compose -f docker-compose-simple.yml up -d
+docker-compose up -d
+docker-compose logs -f scan-agent
 ```
 
-### Install as System Service (Linux)
+### Run tests
 ```bash
-# Install and start as a systemd service
-python run.py --install-service
-```
-
-## Traditional Method (Advanced)
-
-For more control over configuration:
-
-1. Configure `config.yaml` paths for your Linux server (defaults assume `/scan_inbox` and `/scan_out`).
-1. Activate your Python venv (this project assumes `.venv`):
-
- 
-```powershell
-# Windows PowerShell (development)
-E:/WorkSpace/PrinterDuplexScanForCheapPrint/.venv/Scripts/Activate.ps1
-```
-
-1. Run the agent:
-
- 
-```powershell
-E:/WorkSpace/PrinterDuplexScanForCheapPrint/.venv/Scripts/python.exe src/main.py --config config.yaml
-```
-
-On Linux deployment:
-
- 
-```bash
-source .venv/bin/activate
-python3 src/main.py --config config.yaml
+pytest tests/
 ```
 
 ## Notes
 
-- Duplex scan assumes user scans fronts first, then backs; images are interleaved in the final PDF as `1F, 1B, 2F, 2B, ...`.
-- Card 2-in-1 pairs two images per page: landscape → left-right, portrait → top-bottom.
-- Scan Document mode uses a 2×2 logical grid; documents are placed in quadrants based on their bounding box center; no auto-centering or beautification.
-- Confirm/Reject is driven by the arrival of any file in `confirm/` or `reject/`.
-- Printing uses `lp` and only runs on Linux.
-
-## Systemd (optional)
-
-Create a service to run on boot (edit paths):
-
-```ini
-[Unit]
-Description=Scan Agent
-After=network.target
-
-[Service]
-WorkingDirectory=/opt/PrinterDuplexScanForCheapPrint
-ExecStart=/opt/PrinterDuplexScanForCheapPrint/.venv/bin/python /opt/PrinterDuplexScanForCheapPrint/src/main.py --config /opt/PrinterDuplexScanForCheapPrint/config.yaml
-Restart=always
-User=scanagent
-
-[Install]
-WantedBy=multi-user.target
-```
+- Duplex scan assumes user scans fronts first, then backs; images are interleaved as `1F, 1B, 2F, 2B, ...`
+- Card 2-in-1 pairs two images per page: landscape → left-right, portrait → top-bottom
+- Scan Document uses a 2×2 logical grid placed by bounding box center — no auto-centering
+- Confirm/Reject is triggered by any file arriving in the `confirm/` or `reject/` folder
+- Printing uses CUPS `lp` and only works on Linux (inside the container)
+- Background removal requires ONNX models in `checkpoints/` — see `plans/model-dependencies.md`
 
 ## License
 
 Internal deployment; no external license headers added.
+

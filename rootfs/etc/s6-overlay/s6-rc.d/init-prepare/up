@@ -1,46 +1,47 @@
-#!/usr/bin/with-contenv bashio
+#!/usr/bin/with-contenv bash
 # ==============================================================================
 # Prepare environment and configuration
 # Runs once before services start
-# Uses bashio to read Home Assistant addon options
+#
+# Two modes:
+#   HAOS  — bashio available: reads addon options, generates /data/config.yaml
+#   Docker — bashio absent:   /data/config.yaml already mounted, used as-is
 # ==============================================================================
 
 set -e
 
-bashio::log.info "Preparing Scan Agent environment..."
+# ── Logging helper ───────────────────────────────────────────────────────────
+log_info() {
+    if command -v bashio &>/dev/null; then
+        bashio::log.info "$1"
+    else
+        echo "[init-prepare] $1"
+    fi
+}
 
-# ── Read options via bashio ──────────────────────────────────────────────────
-SESSION_TIMEOUT=$(bashio::config 'session_timeout_seconds' '300')
-DELETE_INBOX=$(bashio::config 'delete_inbox_files_after_process' 'true')
-TEST_MODE=$(bashio::config 'test_mode' 'false')
-PRINTER_ENABLED=$(bashio::config 'printer.enabled' 'false')
-PRINTER_NAME=$(bashio::config 'printer.name' '')
-PRINTER_IP=$(bashio::config 'printer.ip' '')
-FTP_USERNAME=$(bashio::config 'ftp.username' '')
-FTP_PASSWORD=$(bashio::config 'ftp.password' '')
-TG_ENABLED=$(bashio::config 'telegram.enabled' 'false')
-TG_TOKEN=$(bashio::config 'telegram.bot_token' '')
-TG_AUTH=$(bashio::config 'telegram.authorized_users' '[]')
-TG_NOTIFY=$(bashio::config 'telegram.notify_chat_ids' '[]')
-TG_NOTIFY_ON_READY=$(bashio::config 'telegram.notify_on_session_ready' 'true')
+log_info "Preparing Scan Agent environment..."
 
-bashio::log.info "Log level: $(bashio::config 'log_level' 'info')"
+# ── Read configuration ───────────────────────────────────────────────────────
+if command -v bashio &>/dev/null; then
+    # HAOS mode: read supervisor options and generate /data/config.yaml
+    SESSION_TIMEOUT=$(bashio::config 'session_timeout_seconds' '300')
+    DELETE_INBOX=$(bashio::config 'delete_inbox_files_after_process' 'true')
+    TEST_MODE=$(bashio::config 'test_mode' 'false')
+    PRINTER_ENABLED=$(bashio::config 'printer.enabled' 'false')
+    PRINTER_NAME=$(bashio::config 'printer.name' '')
+    PRINTER_IP=$(bashio::config 'printer.ip' '')
+    FTP_USERNAME=$(bashio::config 'ftp.username' '')
+    FTP_PASSWORD=$(bashio::config 'ftp.password' '')
+    TG_ENABLED=$(bashio::config 'telegram.enabled' 'false')
+    TG_TOKEN=$(bashio::config 'telegram.bot_token' '')
+    TG_AUTH=$(bashio::config 'telegram.authorized_users' '[]')
+    TG_NOTIFY=$(bashio::config 'telegram.notify_chat_ids' '[]')
+    TG_NOTIFY_ON_READY=$(bashio::config 'telegram.notify_on_session_ready' 'true')
 
-# ── Create directories ───────────────────────────────────────────────────────
-bashio::log.info "Setting up directories..."
-mkdir -p /share/scan_inbox/{scan_duplex,copy_duplex,scan_document,card_2in1,confirm,confirm_print,reject,test_print}
-mkdir -p /share/scan_out
-mkdir -p /data/checkpoints
+    log_info "Log level: $(bashio::config 'log_level' 'info')"
+    log_info "Generating /data/config.yaml..."
 
-# Copy checkpoint models to persistent storage on first run
-if [ ! -f "/data/checkpoints/depth_anything_v2_vits_slim.onnx" ]; then
-    bashio::log.info "Copying checkpoint models to /data/checkpoints..."
-    cp -r /app/checkpoints/* /data/checkpoints/
-fi
-
-# ── Generate /data/config.yaml ───────────────────────────────────────────────
-bashio::log.info "Generating /data/config.yaml..."
-cat > /data/config.yaml << EOF
+    cat > /data/config.yaml << EOF
 # Auto-generated from Home Assistant addon options — DO NOT EDIT MANUALLY
 inbox_base: /share/scan_inbox
 subdirs:
@@ -74,20 +75,43 @@ telegram:
   notify_on_session_ready: ${TG_NOTIFY_ON_READY}
 EOF
 
-bashio::log.info "/data/config.yaml written."
+    log_info "/data/config.yaml written."
+else
+    # Plain Docker mode: /data/config.yaml must already be mounted from test_data/
+    if [ ! -f "/data/config.yaml" ]; then
+        echo "[init-prepare] ERROR: /data/config.yaml not found."
+        echo "[init-prepare] Mount test_data/config.yaml as /data — see test-docker.ps1"
+        exit 1
+    fi
+    log_info "Plain Docker mode: using pre-mounted /data/config.yaml"
+
+    # Extract values needed for env propagation
+    FTP_USERNAME=$(python3 -c "import yaml; c=yaml.safe_load(open('/data/config.yaml')); print(c.get('ftp',{}).get('username',''))" 2>/dev/null || echo "")
+    FTP_PASSWORD=$(python3 -c "import yaml; c=yaml.safe_load(open('/data/config.yaml')); print(c.get('ftp',{}).get('password',''))" 2>/dev/null || echo "")
+    TG_TOKEN=$(python3 -c "import yaml; c=yaml.safe_load(open('/data/config.yaml')); print(c.get('telegram',{}).get('bot_token',''))" 2>/dev/null || echo "")
+fi
+
+# ── Create directories ───────────────────────────────────────────────────────
+log_info "Setting up directories..."
+mkdir -p /share/scan_inbox/{scan_duplex,copy_duplex,scan_document,card_2in1,confirm,confirm_print,reject,test_print}
+mkdir -p /share/scan_out
+mkdir -p /data/checkpoints
+
+# Copy checkpoint models to persistent storage on first run
+if [ ! -f "/data/checkpoints/depth_anything_v2_vits_slim.onnx" ]; then
+    if [ -d "/app/checkpoints" ] && [ "$(ls -A /app/checkpoints 2>/dev/null)" ]; then
+        log_info "Copying checkpoint models to /data/checkpoints..."
+        cp -r /app/checkpoints/* /data/checkpoints/
+    fi
+fi
 
 # ── Propagate settings to S6 container environment for service scripts ───────
-printf '%s' "/share/scan_inbox" > /run/s6/container_environment/SCAN_INBOX_BASE
-printf '%s' "/share/scan_inbox" > /run/s6/container_environment/SCAN_INBOX_DIR
-printf '%s' "/share/scan_out"   > /run/s6/container_environment/SCAN_OUTPUT_DIR
-printf '%s' "${FTP_USERNAME}"   > /run/s6/container_environment/FTP_USERNAME
-printf '%s' "${FTP_PASSWORD}"   > /run/s6/container_environment/FTP_PASSWORD
-printf '%s' "${TG_TOKEN}"       > /run/s6/container_environment/SCAN_TELEGRAM_BOT_TOKEN
-printf '%s' "1"                 > /run/s6/container_environment/PYTHONUNBUFFERED
+printf '%s' "/share/scan_inbox"  > /run/s6/container_environment/SCAN_INBOX_BASE
+printf '%s' "/share/scan_inbox"  > /run/s6/container_environment/SCAN_INBOX_DIR
+printf '%s' "/share/scan_out"    > /run/s6/container_environment/SCAN_OUTPUT_DIR
+printf '%s' "${FTP_USERNAME:-}"  > /run/s6/container_environment/FTP_USERNAME
+printf '%s' "${FTP_PASSWORD:-}"  > /run/s6/container_environment/FTP_PASSWORD
+printf '%s' "${TG_TOKEN:-}"      > /run/s6/container_environment/SCAN_TELEGRAM_BOT_TOKEN
+printf '%s' "1"                  > /run/s6/container_environment/PYTHONUNBUFFERED
 
-# ── Summary ──────────────────────────────────────────────────────────────────
-bashio::log.info "Session timeout:  ${SESSION_TIMEOUT}s"
-bashio::log.info "Printer enabled:  ${PRINTER_ENABLED}"
-bashio::log.info "Telegram enabled: ${TG_ENABLED}"
-bashio::log.info "Test mode:        ${TEST_MODE}"
-bashio::log.info "Preparation complete. Starting services..."
+log_info "Preparation complete. Starting services..."

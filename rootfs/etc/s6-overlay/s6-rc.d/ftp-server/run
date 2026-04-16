@@ -1,11 +1,15 @@
-#!/usr/bin/with-contenv bashio
+#!/usr/bin/with-contenv bash
 # ==============================================================================
 # Start FTP Server
 # Credentials loaded from S6 container environment (set by init-prepare)
 # Auto-restarts if crashes
 # ==============================================================================
 
-bashio::log.info "Starting FTP server on port 2121..."
+if command -v bashio &>/dev/null; then
+    bashio::log.info "Starting FTP server on port 2121..."
+else
+    echo "[ftp-server] Starting FTP server on port 2121..."
+fi
 
 cd /app
 
