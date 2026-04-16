@@ -2,6 +2,8 @@
 
 A Home Assistant addon that extends the Brother MFC-7860DW "Scan to FTP" feature into predictable duplex scanning, copying, small-document layout, and 2-in-1 card scanning.
 
+Developed and tested on the **Brother MFC-7860DW**, but works with any scanner model that supports creating FTP scan profiles (most Brother MFC/DCP series, and many other network scanners).
+
 Core philosophy: reflect physical intent; do not guess, beautify, or auto-center.
 
 ## Features
@@ -29,22 +31,74 @@ Core philosophy: reflect physical intent; do not guess, beautify, or auto-center
 
 Each FTP profile on the scanner should point to one of these subfolders.
 
-## Installation (Home Assistant)
+---
+
+## Quick Start
+
+### Option 1: Home Assistant Addon (Recommended)
 
 1. In Home Assistant, go to **Settings → Add-ons → Add-on Store**
 2. Click the three-dot menu → **Repositories** → add your repository URL
 3. Find **Scan Agent** and click **Install**
 4. Configure options (FTP credentials, printer, Telegram)
-5. Start the addon
+5. Start the addon — the web dashboard is available in the HA sidebar
 
 The addon exposes:
 - **Port 2121** — FTP control (scanner uploads)
 - **Ports 30000–30002** — FTP passive data ports
 - **Ingress** — Web dashboard (accessible from HA sidebar)
 
-## Scanner Configuration (Brother MFC-7860DW)
+### Option 2: Local Python (Development)
 
-Set up an FTP profile on the scanner for each scan mode:
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Copy and edit config
+cp config.local.template.yaml config.local.yaml
+
+# Start everything (scan agent + FTP server port 2121 + web UI port 8099)
+python run.py
+
+# Windows: double-click start.bat
+
+# Selective startup
+python run.py --no-ftp          # agent + web UI only
+python run.py --no-web          # agent + FTP only
+python run.py --no-ftp --no-web # agent only
+python run.py --setup           # create config + dirs, don't start
+```
+
+The orchestrator automatically creates `scan_inbox/`, `scan_out/`, logs all output to `./logs/`, and handles graceful shutdown on Ctrl+C.
+
+### Option 3: Docker (standalone, no Home Assistant required)
+
+```bash
+# Copy and edit config
+cp config.local.template.yaml test_data/config.yaml
+
+# Build
+docker build -f Dockerfile.local -t scan-agent .
+
+# Run
+docker run --rm \
+  -v "$PWD/scan_inbox:/share/scan_inbox" \
+  -v "$PWD/scan_out:/share/scan_out" \
+  -v "$PWD/test_data/config.yaml:/data/config.yaml:ro" \
+  -v "$PWD/checkpoints:/app/checkpoints" \
+  -p 2121:2121 -p 8099:8099 \
+  -p 30000:30000 -p 30001:30001 -p 30002:30002 \
+  scan-agent
+# Web UI: http://localhost:8099
+```
+
+Uses `Dockerfile.local` with a standard Python base image — no Home Assistant or s6-overlay needed.
+
+---
+
+## Scanner Configuration
+
+Set up an FTP profile on your scanner for each scan mode:
 
 | Profile | Remote Path |
 |---------|-------------|
@@ -53,44 +107,31 @@ Set up an FTP profile on the scanner for each scan mode:
 | Scan Document | `/scan_document` |
 | Card 2-in-1 | `/card_2in1` |
 
-- **Server**: Home Assistant IP address
+- **Server**: machine IP running Scan Agent
 - **Port**: 2121
-- **Username/Password**: as configured in addon options (or leave blank for anonymous)
+- **Username/Password**: as configured in addon options / `config.local.yaml` (or leave blank for anonymous)
 
-## Local Development
+> On Brother scanners: **Menu → Network → Scan to FTP → FTP Profiles**. Other brands with FTP scan support (Canon imageRUNNER, Ricoh, Lexmark, etc.) use similar menus under "Scan to Network" or "Scan to FTP".
 
-### Requirements
-- Python 3.10+
-- Dependencies: `pip install -r requirements.txt`
+---
 
-### Run locally
-```bash
-# Copy and edit the local config
-cp config.local.template.yaml config.local.yaml
-# Edit config.local.yaml with your local paths
+## Folder Structure
 
-# Start all services (scan agent + FTP server + web UI)
-python run.py
+```
+scan_inbox/
+├── scan_duplex/      # Front/back scans (auto-paired)
+├── copy_duplex/      # Scan + auto-print
+├── scan_document/    # Multi-document 2×2 grid layout
+├── card_2in1/        # ID cards (2 per page)
+├── test_print/       # Direct PDF print (no processing)
+├── confirm/          # Files here trigger session processing
+└── reject/           # Files here cancel session
 
-# Start selectively
-python run.py --no-ftp      # agent + web UI only
-python run.py --no-web      # agent + FTP only
-python run.py --no-ftp --no-web  # agent only
-
-# Setup directories only (no services)
-python run.py --setup
+scan_out/
+└── Generated PDFs and metadata JSON files
 ```
 
-### Docker (local testing)
-```bash
-docker-compose up -d
-docker-compose logs -f scan-agent
-```
-
-### Run tests
-```bash
-pytest tests/
-```
+---
 
 ## Notes
 
