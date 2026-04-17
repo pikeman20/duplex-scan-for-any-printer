@@ -1,4 +1,4 @@
-inbox_base: "e:/WorkSpace/PrinterDuplexScanForCheapPrint/scan_inbox"
+inbox_base: "scan_inbox"
 subdirs:
   scan_duplex: "scan_duplex"
   copy_duplex: "copy_duplex"
@@ -7,7 +7,7 @@ subdirs:
   confirm: "confirm"
   confirm_print: "confirm_print"
   reject: "reject"
-output_dir: "e:/WorkSpace/PrinterDuplexScanForCheapPrint/scan_out"
+output_dir: "scan_out"
 session_timeout_seconds: 300
 a4_page:
   width_pt: 595
