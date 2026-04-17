@@ -3,12 +3,12 @@ name: Build and Publish Add-on
 on:
   push:
     branches:
-      - main
+      - master
     tags:
       - 'v*'
   pull_request:
     branches:
-      - main
+      - master
 
 jobs:
   build:
@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [aarch64, amd64, armhf, armv7, i386]
+        arch: [aarch64, amd64]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
     name: Notify hassio-addons to sync submodule
     runs-on: ubuntu-latest
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master')
     steps:
       - name: Trigger submodule sync in hassio-addons
         run: |
