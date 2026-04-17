@@ -26,13 +26,20 @@ def _get_bg_removal_model():
     """
     global _BG_REMOVAL_MODEL
     if _BG_REMOVAL_MODEL is None:
-        logger.info("🔄 Loading background removal model (~500MB)...")
+        _checkpoint_paths = [
+            "./checkpoints/depth_anything_v2_vits_slim.onnx",
+            "./checkpoints/isnet_uint8.onnx",
+            "./checkpoints/focus_matting_1.0.0.onnx",
+            "./checkpoints/focus_refiner_1.0.0.onnx",
+        ]
+        _total_mb = sum(os.path.getsize(p) for p in _checkpoint_paths if os.path.exists(p)) / 1024 / 1024
+        logger.info(f"🔄 Loading background removal model ({_total_mb:.0f} MB)...")
         load_start = time.time()
         _BG_REMOVAL_MODEL = OpenSourceModel(
-            depth_model_path="./checkpoints/depth_anything_v2_vits_slim.onnx",
-            isnet_model_path="./checkpoints/isnet.onnx",
-            matting_model_path="./checkpoints/focus_matting_1.0.0.onnx",
-            refiner_model_path="./checkpoints/focus_refiner_1.0.0.onnx"
+            depth_model_path=_checkpoint_paths[0],
+            isnet_model_path=_checkpoint_paths[1],
+            matting_model_path=_checkpoint_paths[2],
+            refiner_model_path=_checkpoint_paths[3],
         )
         load_time = time.time() - load_start
         logger.info(f"✅ Model loaded successfully in {load_time:.2f}s")
@@ -48,7 +55,18 @@ def _unload_bg_removal_model():
         logger.info("🗑️  Unloading background removal model to free RAM...")
         _BG_REMOVAL_MODEL = None
         gc.collect()
-        logger.info("✅ Model unloaded, RAM freed (~500MB)")
+
+def _remove_background_rmbg(model, img: Image.Image) -> Image.Image:
+    """Run background removal on an image using the given model.
+
+    Args:
+        model: Background removal model instance (from _get_bg_removal_model).
+        img: Input PIL Image.
+
+    Returns:
+        PIL Image in RGBA mode with alpha channel representing the foreground mask.
+    """
+    return model.remove_background(img)
 
 
 def load_image(path: str) -> Image.Image:
