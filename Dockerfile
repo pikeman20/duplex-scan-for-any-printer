@@ -9,7 +9,8 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # Install system dependencies
 RUN \
-    apt-get update \
+    dpkg --add-architecture i386 \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         python3 \
         python3-pip \
@@ -20,6 +21,8 @@ RUN \
         cups-ipp-utils \
         libcups2 \
         libcupsimage2 \
+        libc6:i386 \
+        libstdc++6:i386 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install Brother printer drivers (all .deb files, sorted — LPR before wrapper)
