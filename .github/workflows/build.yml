@@ -21,10 +21,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Get version from config.json
+      - name: Get version from config.yaml
         id: version
         run: |
-          echo "version=$(jq -r '.version' config.json)" >> $GITHUB_OUTPUT
+          echo "version=$(yq '.version' config.yaml)" >> $GITHUB_OUTPUT
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3

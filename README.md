@@ -1,8 +1,8 @@
-# Scan Agent — Brother Scanner Home Assistant Addon
+# Printer Duplex Scan Agent — Home Assistant Addon
 
-A Home Assistant addon that extends the Brother MFC-7860DW "Scan to FTP" feature into predictable duplex scanning, copying, small-document layout, and 2-in-1 card scanning.
+Turn any single-sided scanner into a duplex scanning machine — **no hardware upgrade needed**. Just place your document, press Scan, and the addon handles the rest: merging front & back pages, deskewing, PDF generation, duplex printing, card/ID layout, and Telegram notifications.
 
-Developed and tested on the **Brother MFC-7860DW**, but works with any scanner model that supports creating FTP scan profiles (most Brother MFC/DCP series, and many other network scanners).
+Built for scanners that support "Scan to FTP" profiles (tested on **Brother MFC-7860DW**, compatible with most Brother MFC/DCP series and other network scanners that support FTP scan profiles).
 
 Core philosophy: reflect physical intent; do not guess, beautify, or auto-center.
 
