@@ -2,6 +2,7 @@
 numpy
 opencv-python-headless
 Pillow
+pyvips
 PyYAML
 watchdog
 pyftpdlib

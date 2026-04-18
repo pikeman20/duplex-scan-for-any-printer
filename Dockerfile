@@ -21,6 +21,7 @@ RUN \
         cups-ipp-utils \
         libcups2 \
         libcupsimage2 \
+        libvips \
         libc6:i386 \
         libstdc++6:i386 \
     && rm -rf /var/lib/apt/lists/*
@@ -43,7 +44,7 @@ COPY src/ ./src/
 COPY checkpoints/ ./checkpoints/
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app:/app/src
 
 WORKDIR /
 
