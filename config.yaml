@@ -3,7 +3,7 @@ version: 1.0.0
 slug: printer-duplex-scan-agent
 description: Turn any single-sided scanner into a duplex scanning machine — just place your document and press Scan, the addon handles merging, deskewing, card layout, and more.
 url: https://github.com/pikeman20/duplex-scan-for-any-printer
-image: ghcr.io/pikeman20/hassio-printer-duplex-scan-agent-{arch}
+image: ghcr.io/pikeman20/duplex-scan-for-any-printer-{arch}
 arch:
   - amd64
   - aarch64
