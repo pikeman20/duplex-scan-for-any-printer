@@ -1,4 +1,4 @@
-#!/usr/bin/with-contenv bash
+#!/command/with-contenv bashio
 # ==============================================================================
 # Start FTP Server
 # Credentials loaded from S6 container environment (set by init-prepare)

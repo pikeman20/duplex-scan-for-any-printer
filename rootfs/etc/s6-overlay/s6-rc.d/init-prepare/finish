@@ -1,2 +1,3 @@
-#!/usr/bin/execlineb -S0
-s6-echo "[finish] init-prepare done"
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+bashio::log.info "init-prepare done"

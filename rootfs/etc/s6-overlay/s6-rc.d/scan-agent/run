@@ -1,4 +1,4 @@
-#!/usr/bin/with-contenv bash
+#!/command/with-contenv bashio
 # ==============================================================================
 # Start Scan Agent
 # Config is at /data/config.yaml — generated from HA options by init-prepare

@@ -1,4 +1,4 @@
-#!/usr/bin/with-contenv bash
+#!/command/with-contenv bashio
 # ==============================================================================
 # Start Web UI Server
 # Serves the dashboard on port 8099; proxies /api/* to agent API on 8098
